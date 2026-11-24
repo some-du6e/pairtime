@@ -205,7 +205,7 @@ func TestCarry(t *testing.T) {
 			},
 		},
 		{
-			name: "a session keeps its start, last prompt, last output and last stop",
+			name: "a session keeps its start, last prompt, last output and last stop, and the output its last prompt read",
 			fold: []event.Event{
 				ev(100, 1, "s_1", &event.SessionStart{}),
 				ev(200, 2, "s_1", &event.PromptSubmit{}),
@@ -219,8 +219,29 @@ func TestCarry(t *testing.T) {
 				if s == nil || s.Start.T != 100 || s.Prompt.T != 400 || s.Output.T != 600 || s.Stop.T != 500 || s.Last != 600 {
 					t.Errorf("session carry %+v", s)
 				}
-				if got := len(c.records(nil, 0, testGaps, 0, 0)); got != 4 {
-					t.Errorf("the carry gives %d records, want 4", got)
+				if got := len(c.records(nil, 0, testGaps, 0, 0)); got != 5 {
+					t.Errorf("the carry gives %d records, want 5", got)
+				}
+			},
+		},
+		{
+			name: "of a session's outputs and stops the carry keeps the last ones and the last before each record it carries, and no others",
+			fold: []event.Event{
+				ev(100, 1, "s_1", &event.SessionStart{}),
+				ev(200, 2, "s_1", &event.AgentOutput{}),
+				ev(300, 3, "s_1", &event.AgentOutput{}),
+				ev(400, 4, "s_1", &event.PromptSubmit{}),
+				ev(500, 5, "s_1", &event.AgentOutput{}),
+				ev(600, 6, "s_1", &event.AgentStop{}),
+				ev(700, 7, "s_1", &event.AgentOutput{}),
+			},
+			check: func(t *testing.T, c carry) {
+				var seqs []uint64
+				for _, e := range c.Sessions["s_1"].Asks {
+					seqs = append(seqs, e.Seq)
+				}
+				if want := []uint64{3, 5, 6, 7}; !slices.Equal(seqs, want) {
+					t.Errorf("the carry keeps the outputs and stops numbered %v, want %v", seqs, want)
 				}
 			},
 		},
@@ -289,6 +310,9 @@ func TestCarry(t *testing.T) {
 				c.fold(e, testGaps, testGaps.native)
 			}
 			c.prune(tt.from)
+			for _, s := range c.Sessions {
+				s.keepAsks(nil) // as a window with no record of the session does
+			}
 			tt.check(t, c)
 		})
 	}
