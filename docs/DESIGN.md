@@ -304,7 +304,7 @@ The agent serves a Svelte app embedded in the binary at `127.0.0.1:<port>`, open
 
 ### 3.10 Server
 
-One Go process, `pairtimed`, with the Svelte UI embedded, SQLite in WAL mode replicated by Litestream, behind `cloudflared` on Karim's domain (SP 1, 9.1). The SQL stays portable so Postgres remains the scale-out path (SP 7.4, 9.5).
+One Go process, `pairtimed`, with its pages rendered by Go's `html/template` (D-server-ui), SQLite in WAL mode replicated by Litestream, behind `cloudflared` on Karim's domain (SP 1, 9.1). The SQL stays portable so Postgres remains the scale-out path (SP 7.4, 9.5).
 
 | Component | Endpoints | Notes |
 |---|---|---|
@@ -351,8 +351,8 @@ internal/coach/            recaps, moments, logbook, stories, devlog drafts, hab
 internal/webui/            go:embed of the built UI, with a checked-in placeholder so go build needs no Node
 internal/server/           store, ingest, witness, rollup, stream, auth, device, profile, project, forge, devlog, club,
                            submission, reveal, review, fraud, program, hackatime, justification, privacy, backup,
-                           publisher, sentinelapi
-web/                       Svelte 5 and TypeScript, built by Vite: local dashboard and server UI, shared components
+                           publisher, sentinelapi, pages
+web/                       Svelte 5 and TypeScript, built by Vite: local dashboard and its components; Playwright specs
 extension/vscode/          install channel and status bar; per-platform VSIX packages bundle the binary
 extension/gnome-shell/     GNOME Shell extension in GJS: the process of the window in front, for the agent only (3.3, 5.9)
 integrations/              program kit
@@ -369,7 +369,7 @@ docs/schema/               event.schema.json (PR1)
 ### 3.12 Languages, toolchain and dependencies
 
 - **Go 1.26 for both binaries until Go 1.28 ships in February 2027, then Go 1.27**, `CGO_ENABLED=0`, cross-compiled from one Linux job to PR1's seven targets. From then on the `go` directive follows the oldest Go release still supported (13.1 item 8; JB must-fix 11). Go 1.27 needs macOS 13, as Claude Code already does (CP 1.5, 4.1), so Macs that top out at macOS 12, the 2015 and 2016 models among them, keep the last Go 1.26 build. Nothing that installs or updates pairtime puts a binary in place before running its `version` (docs/spec/update-manifest.md, Verifying step 8): the updater and the VS Code extension keep the binary they have when that fails, a client that can't update keeps working and `doctor` says why, and `install.sh` gives macOS 12 the last Go 1.26 release. macOS 12 support ends when `minimum_version` is raised past that release. Staying on Go 1.26 would leave `pairtimed`, which holds minors' data, on an unpatched toolchain and pin every module at the last versions that build on 1.26, `golang.org/x/sys` first.
-- **Svelte 5 with TypeScript**, built by Vite, embedded with `embed`, API types generated from an OpenAPI file (SP 7.3). `internal/webui` embeds `dist/`, and the repo carries a placeholder `dist/index.html`, so `go build` and every Go-only CI job run without Node. `release.yml` and `web.yml` build the real UI first (JE must-fix 8).
+- **Svelte 5 with TypeScript** for the local dashboard, built by Vite, embedded with `embed`, API types generated from an OpenAPI file (SP 7.3). `internal/webui` embeds `dist/`, and the repo carries a placeholder `dist/index.html`, so `go build` and every Go-only CI job run without Node. `release.yml` and `web.yml` build the real UI first (JE must-fix 8). `pairtimed` has no npm code. It renders its pages with Go's `html/template`, and a page that needs a script inlines a hand-written file embedded in `pairtimed`, which that page's Content-Security-Policy names by its SHA-256 (D-server-ui).
 - **TypeScript** for the VS Code extension, **PowerShell and POSIX sh** for the install scripts, **JavaScript** for the Airtable automation script and, run by gnome-shell's GJS, the GNOME Shell extension, and **stdlib-only Python** for the ledger reference.
 - **Dependencies.** Standard library first, as PR1's AGENTS.md says; each module's PR states why the standard library falls short, and the first such PR adds a transitive license check to CI. The allowed list, all cgo-free and permissive (CP 7): `golang.org/x/sys` (Win32 and Unix calls), `github.com/ebitengine/purego` (macOS frameworks), `github.com/godbus/dbus/v5` (Linux idle, logind, notifications), `github.com/fsnotify/fsnotify` (file notifications), `github.com/zalando/go-keyring` (Keychain and Secret Service), `fyne.io/systray` (tray, if its WP confirms a cgo-free build), and `modernc.org/sqlite` for `pairtimed` only. All cryptography is standard library: `crypto/ed25519`, `crypto/ecdh`, `crypto/hkdf`, `crypto/hmac`, `crypto/sha256`, and AES-256-GCM through `crypto/aes` and `crypto/cipher`. That replaces the XChaCha20-Poly1305 the designs named, so `golang.org/x/crypto` isn't needed.
 - **Size decisions made now** (JE must-fix 4): the OTLP receiver accepts `http/json` only, which Claude Code supports, so there is no protobuf dependency (HS 16 item 4). The Codex rollout reader handles `.jsonl`; `.jsonl.zst` files are counted and reported by `doctor`, and a zstd decoder is added only if Codex turns compression on by default (HS 6.2).
@@ -381,7 +381,7 @@ GitHub Actions is the only build and test environment, and its capacity is share
 - `ci.yml` stays PR1's single `ubuntu-latest` job: license gate, gofmt, vet, `go test ./...`, the seven-target cross-compile with the 15 MB budget. New Linux checks join it as steps, except a check that needs a `services:` container, such as Postgres or MinIO, which gets a path-filtered workflow of its own. The SM fixtures, the `score-regression` check and the Python ledger reference run here.
 - Windows and macOS run only in `platform.yml`, path-filtered to `internal/platform/**`, `internal/install/**`, `internal/agent/ipc/**` and `cmd/pairtime/**`, and on release tags. Platform tests use injected fakes on hosted runners; real focus switching runs only on Linux under Xvfb with `xdotool` (JE must-fix 11).
 - `-race` needs cgo, so it runs only in `nightly.yml` on Linux, for `internal/agent` and `internal/server`. The PR that adds it adds this one exception to AGENTS.md's `CGO_ENABLED=0` rule. The Postgres suite also runs nightly and on PRs that touch `internal/server/store/**`.
-- Other workflows, each with `workflow_dispatch` and a `concurrency` group with `cancel-in-progress`: `web.yml` (vitest and Playwright, path-filtered to `web/**` and `extension/**`), `rehearsal.yml` (the end-to-end rehearsal under Xvfb, on PRs that change what it builds or reads, every push to `main` and release tags), `e2e-wakatime.yml` (5.6), `e2e-install.yml`, `footprint.yml` (9.7), `release.yml`, `restore-drill.yml` (weekly), `loadtest.yml` (weekly and manual), `fixtures.yml` (manual, validates fixture provenance).
+- Other workflows, each with `workflow_dispatch` and a `concurrency` group with `cancel-in-progress`: `web.yml` (vitest and Playwright, path-filtered to `web/**` and `extension/**`), `rehearsal.yml` (the end-to-end rehearsal under Xvfb, then Playwright on Chromium against `pairtimed`'s pages, on PRs that change what it builds or reads, every push to `main` and release tags), `e2e-wakatime.yml` (5.6), `e2e-install.yml`, `footprint.yml` (9.7), `release.yml`, `restore-drill.yml` (weekly), `loadtest.yml` (weekly and manual), `fixtures.yml` (manual, validates fixture provenance).
 - The PR that adds the first workflow beyond `ci.yml` updates AGENTS.md's "one job" sentence to describe this layout.
 
 ## 4. Data model and what crosses the network
@@ -1174,8 +1174,12 @@ A submission with relayed credit (SM 2.2 rule 9) names it after the interrupts, 
 | `Justification - Additional Justification` | The review URL |
 | `Justification - Hackatime Project Name(s) + Date Range(s)` | `remind-bot 11/1/2026-11/18/2026` in the handbook's format with UTC dates, when the teen linked Hackatime |
 | `Justification - Submitter Hackatime ID` | The numeric Hackatime id, when linked |
-| `Deflation Justification` | A factual draft from the reason codes ("deflated from Hackatime's 9.1 h to pairtime's 5.9 h: agent-only runtime 2.1 h, re-roll loops 0.6 h, idle reading 0.5 h excluded") that the reviewer confirms or rewrites |
+| `Deflation Justification` | The reviewer's text, when the approved hours are below the tracked hours. pairtime drafts it from the reason codes and the reviewer's cuts ("deflated from Hackatime's 9.1 h to pairtime's 5.9 h: agent-only runtime 2.1 h, re-roll loops 0.6 h, idle reading 0.5 h excluded"), and the reviewer confirms the draft as written or rewrites it on the review page (7.7 item 11) |
 | `Specific Technical Features` | Left to the reviewer |
+
+The tracked hours are the larger of pairtime's credited hours and, when the teen linked Hackatime, Hackatime's figure in the Alternate Tracking Method text. The approved hours are the `Optional - Override Hours Spent` figure. The draft gives both to 0.1 h, and pairtime counts a deflation only when the approved hours are below the tracked hours at that rounding. The draft runs from the tracked hours to the approved hours. When it starts from Hackatime's figure, it lists pairtime's exclusions by reason code, as the example above does for a review with no cuts, and then any hours no reason code explains. Then it lists each cut, raise or clearance the reviewer made, by reason code and hours. It copies none of the reviewer's own text, so an `other` cut shows its hours alone. The parts are rounded so they add up to the deflation.
+
+On the review page the draft sits in a text box, and the reviewer confirms it as written or rewrites it (7.7 item 11). pairtime keeps the confirmation with a hash of the facts the draft stated: the tracked hours and whose they are, the approved hours, and each part's hours. It holds only while the draft pairtime would write now states the same facts, so a later cut, raise, clearance, re-score or purge that moves one of them ends it, and the box shows a fresh draft. pairtime refuses a text that holds personal data (4.4), and for a deflation one that doesn't give the approved hours. The field's copy button shows only while a confirmation holds. The endpoint never returns a draft. While the review deflates the tracked hours and no confirmation holds, it answers `409 deflation_unconfirmed` with the review URL, and the Airtable script writes no field of that record (5.10). Once a confirmation holds, the endpoint returns its text byte for byte, and the script's default mapping includes the field. With no deflation and no confirmation holding, the endpoint returns the field empty, and the script empties the cell, so text from an earlier confirmation doesn't stay beside hours it no longer explains.
 
 ### 9.4 Routes and programs
 
@@ -1210,6 +1214,7 @@ Zach said "We will work with Quality and Integrity to provide good guidance arou
 5. **The native program**: running or observing audits, a higher spot-check rate, and, with the HQ sponsor, nominating or approving each outside reviewer.
 6. **Loop rows**: raising a D12 row within its captured seconds is a cut-only action under Ari's rule; confirm it.
 7. **Interviews with minors**: the protocol in 7.9.
+8. **Deflation Justification**: pairtime drafts it, and the reviewer confirms the draft as written or rewrites it before it leaves pairtime (9.3). Does a draft the reviewer confirms unchanged count as human-written?
 
 ### 9.6 Who does what in week one
 
@@ -1621,3 +1626,4 @@ Each item says what the design does until the decision is made, so building neve
 14. **Calibration data**: Stardance's per-devlog approved and original minutes with the Hackatime heartbeats behind them, under a data-sharing agreement (SM OQ 6).
 15. **Requiring the typing module**: this design lets no program require it for submitted hours, because the UK code bars nudging children to give up protections (TP OQ 17). Confirm.
 16. **hackatime-setup**: whether its maintainers would take an optional "also install pairtime" step (AD 8.2).
+17. **Deflation Justification** (9.5): whether a draft the reviewer confirms unchanged counts as human-written. Until Quality and Integrity answers, pairtime counts the reviewer who confirms it as its author (9.3). If they say no, the review page shows the draft beside an empty box the reviewer fills, and the endpoint, its 409 and the Airtable script stay as they are.
