@@ -137,8 +137,9 @@ every("16:13:05.900", "16:15:12.000", 5_000, 9_000, False)
 
 events = fx.build()
 
-# The credit, worked out by hand from SM 2.5 (README.md). "site" is A and
-# "api" is B.
+# The credit, worked out by hand from SM 2.5, and from D-split-slots where a
+# slot would split between the projects (README.md). "site" is A and "api"
+# is B.
 exp = tl.Expected(fx, sm="docs/design/struggle-metric.md 2.5", evidence="C", witness="witnessed",
                   projects={A: "site", B: "api"}, start="16:00", end="16:15")
 RUNS = [
@@ -199,13 +200,13 @@ NOTES = {
     "16:02": ("3.3 rule 2", "A1's lead, which beats api's bucket, reset to 20 s when B1's turn starts at 16:02:00."),
     "16:03": ("2.5 and D-split-slots: a slot of unknown focus keeps its first credited second's project",
               "A1, at 16:03:00, is nearer every second than B1 or B2, so site reads whenever its bucket has "
-              "something. It is empty at 16:03:30, the first second of its slot, so api takes the slot to "
-              "16:03:45, though site's edit lands at 16:03:40.", SPLIT),
+              "something at a slot's first second. It is empty at 16:03:30, the first second of its slot, so api "
+              "takes the slot to 16:03:45, though site's edit lands at 16:03:40.", SPLIT),
     "16:04": ("2.5", "site reads; A1 stops at 16:04:40, so SUP becomes READ."),
     "16:05": ("2.5", "B1 stops at 16:05:30. api's bucket holds 245 s, but A1 is still the nearer anchor."),
     "16:06": ("2.5", None),
     "16:07": ("2.5", None),
-    "16:08": ("2.5 and D-split-slots: the nearest anchor can come after the second",
+    "16:08": ("2.5 and D-split-slots: a slot of unknown focus keeps its first credited second's project",
               "At 16:08:00, the first second of its slot, A1 is nearer than B2, so site takes the slot and reads to "
               "16:08:15, where its bucket runs dry. From 16:08:01 B2 is the nearer anchor, 300 s against 301, and "
               "api reads from 16:08:15.", SPLIT),

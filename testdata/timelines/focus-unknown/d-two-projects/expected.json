@@ -75,7 +75,7 @@
       "uncredited": {},
       "agent_running_s": 60,
       "sm": "2.5 and D-split-slots: a slot of unknown focus keeps its first credited second's project",
-      "note": "A1, at 16:03:00, is nearer every second than B1 or B2, so site reads whenever its bucket has something. It is empty at 16:03:30, the first second of its slot, so api takes the slot to 16:03:45, though site's edit lands at 16:03:40.",
+      "note": "A1, at 16:03:00, is nearer every second than B1 or B2, so site reads whenever its bucket has something at a slot's first second. It is empty at 16:03:30, the first second of its slot, so api takes the slot to 16:03:45, though site's edit lands at 16:03:40.",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
       "erratum": "2026-11-24-sm-2.5-split-slots"
     },
@@ -154,7 +154,7 @@
       },
       "uncredited": {},
       "agent_running_s": 0,
-      "sm": "2.5 and D-split-slots: the nearest anchor can come after the second",
+      "sm": "2.5 and D-split-slots: a slot of unknown focus keeps its first credited second's project",
       "note": "At 16:08:00, the first second of its slot, A1 is nearer than B2, so site takes the slot and reads to 16:08:15, where its bucket runs dry. From 16:08:01 B2 is the nearer anchor, 300 s against 301, and api reads from 16:08:15.",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
       "erratum": "2026-11-24-sm-2.5-split-slots"

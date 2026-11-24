@@ -1056,11 +1056,13 @@ func TestFocusUnknownAcceptance(t *testing.T) {
 			if got := f.Expected.Totals.CreditedByProject; got[byName["site"]] != 360 || got[byName["api"]] != 476 {
 				t.Errorf("credit by project %v, want site 360 and api 476 (D-split-slots)", got)
 			}
-			// One slot of each contest: leads (SM 3.3 rule 3), a lead against
-			// a bucket (rule 2), and buckets (SM 2.5), with the two slots the
-			// slot rule gives a project the nearest anchor alone wouldn't,
-			// and the slots after them.
-			want := map[string]string{"16:00:15": "api", "16:02:00": "site", "16:03:00": "site", "16:03:30": "api",
+			// One slot of each contest, each with a first second its rule
+			// decides, since that second gives the slot its p: leads (SM 3.3
+			// rule 3), a lead against a bucket (rule 2), and buckets (SM 2.5),
+			// with the two slots the slot rule gives a project the nearest
+			// anchor alone wouldn't, and the slots after them. 16:00:15 won't
+			// do for rule 3, because A1's lead starts at 16:00:20.
+			want := map[string]string{"16:00:30": "api", "16:02:00": "site", "16:03:00": "site", "16:03:30": "api",
 				"16:03:45": "site", "16:08:00": "site", "16:08:15": "api"}
 			for _, s := range f.slots.Slots {
 				p, ok := want[s.Local]

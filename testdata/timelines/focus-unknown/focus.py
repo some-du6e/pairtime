@@ -3,9 +3,10 @@
 says what they are.
 
 A case's gen.py builds its events with ../timeline.py and writes down, by
-hand, what SM 2.5 credits: runs of seconds, each with its project and
-reason or its uncredited code, and the runs whose credit is level C. From
-those runs it writes the rows of expected.json and the slots of slots.json.
+hand, what SM 2.5 and D-split-slots credit: runs of seconds, each with its
+project and reason or its uncredited code, and the runs whose credit is
+level C. From those runs it writes the rows of expected.json and the slots
+of slots.json.
 Before it writes anything it checks them against Replay, a second-by-second
 reading of SM 2.1 to 2.7 and 5.2 for the few constructs these cases use,
 written only to catch slips in the hand arithmetic. Replay isn't the
@@ -129,15 +130,17 @@ class Replay:
     anchor windows (the lead of the next anchor at or after the second),
     and for buckets of different projects SM 2.5's rule: the project whose
     qualifying human anchor is nearest the second, the earlier anchor on a
-    tie, then the lower project_key. It measures nearest both from the
-    second's start and from its middle, and fails where the two readings
-    pick different projects. A slot of unknown focus keeps one project
-    (D-split-slots, docs/errata/2026-11-24-sm-2.5-split-slots.md): the
-    project whose candidate credits the slot's first credited second takes
-    the slot, and from then on only that project's windows and buckets
-    credit its seconds. An uncredited second takes SM 5.2's first code
-    that applies, with X.other_focus and X.ambiguous skipped and every
-    project's running turns read where focus is unknown.
+    tie, then the lower project_key. A slot of unknown focus keeps one
+    project (D-split-slots, docs/errata/2026-11-24-sm-2.5-split-slots.md):
+    the project whose candidate credits the slot's first credited second
+    takes the slot, and from then on only that project's windows and
+    buckets credit its seconds. So the nearest-anchor rule picks between
+    projects only at a slot's first credited second, and there it measures
+    nearest both from the second's start and from its middle, and fails
+    where the two readings pick different projects. An uncredited second
+    takes SM 5.2's first code that applies, with X.other_focus and
+    X.ambiguous skipped and every project's running turns read where focus
+    is unknown.
 
     credit maps each credited second to (project, reason, level, labels),
     code each uncredited second to its code, running holds the seconds an
