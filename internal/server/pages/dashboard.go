@@ -165,6 +165,10 @@ type dashPage struct {
 	AllProjects projectRow
 	Levels      levelsPart
 	Kinds       []kindRow
+	// Items is the owner's list of the devlogs and badges they published,
+	// each with the button that takes it down; nil on the sample and on a
+	// server that offers none.
+	Items *itemsPart
 }
 
 type todayPart struct {
@@ -1006,6 +1010,14 @@ type Dashboard struct {
 	// project, an account-level project id, from every device key of it
 	// (D-owner-names; projectnames.Hide). Nil offers no hide button.
 	HideName func(ctx context.Context, account, project string) error
+	// Published reads what the account published from its computers, for
+	// the list that takes each item down (WP-SV12 part 2). DeleteDevlog
+	// and RemoveBadge take one down while the account holds it, keeping
+	// its removal record as the device routes do, and do nothing for an
+	// id it doesn't hold (devlog.DeleteHeld, devlog.RemoveHeld). Without
+	// all three the page has no list.
+	Published                 func(ctx context.Context, account string) (Published, error)
+	DeleteDevlog, RemoveBadge func(ctx context.Context, account, id string) error
 	// SameOrigin reports whether a POST comes from this server's own
 	// pages, as auth.Service.SameOrigin does.
 	SameOrigin func(r *http.Request) bool
@@ -1019,10 +1031,11 @@ type Dashboard struct {
 const zoneFormMax = 4 << 10
 
 // RegisterDashboard adds GET /dashboard, the signed-in account's own
-// dashboard, POST /dashboard/zone, which sets its time zone, and POST
+// dashboard, POST /dashboard/zone, which sets its time zone, POST
 // /dashboard/projects/hide, which hides the name of one of its projects
 // the owner turned on (D-owner-names): the website can hide a name, never
-// set or change one. With
+// set or change one, and the forms that take down a devlog or a badge the
+// account published (registerTakeDown). With
 // sign-in off the page says so and links /demo. A visitor who isn't signed
 // in goes to Hack Club sign-in, which brings them back. A session that
 // can't be read is a 500, since signing in again wouldn't help.
@@ -1111,6 +1124,7 @@ func (s *Site) RegisterDashboard(mux *http.ServeMux, in SignIn, d Dashboard) {
 		}
 		http.Redirect(w, r, DashboardPath, http.StatusSeeOther)
 	})
+	registerTakeDown(mux, in, d)
 }
 
 // zoneTooSoon says why a time zone change was refused, with the dates in
@@ -1145,13 +1159,17 @@ func (s *Site) serveDashboard(w http.ResponseWriter, r *http.Request, in SignIn,
 		return
 	}
 	v, err := d.Source.View(r.Context(), id, d.Now())
+	var items *itemsPart
+	if err == nil {
+		items, err = s.items(r.Context(), d, id, v.TZ)
+	}
 	var page []byte
 	if err == nil {
 		acct := &account{SignedIn: true, Login: in.LoginPath, Logout: in.LogoutPath}
 		if in.Visitor != nil {
 			acct.Name, _ = in.Visitor(r)
 		}
-		page, err = s.ownerPage(v, in, acct, zoneError, d.HideName != nil)
+		page, err = s.ownerPage(v, in, acct, zoneError, d.HideName != nil, items)
 	}
 	if err != nil {
 		d.Logger.Error("showing a dashboard", "user", id, "err", err)
@@ -1178,14 +1196,15 @@ func nextLocalDay(v dashboard.View) int64 {
 }
 
 // ownerPage renders v as a signed-in account's own dashboard, with acct in
-// the header, and a "Hide this name" button beside each name its owner
-// turned on when canHide says the server can hide one.
-func (s *Site) ownerPage(v dashboard.View, in SignIn, acct *account, zoneError string, canHide bool) ([]byte, error) {
+// the header, a "Hide this name" button beside each name its owner
+// turned on when canHide says the server can hide one, and items, the
+// list of what the owner published, when the server offers one.
+func (s *Site) ownerPage(v dashboard.View, in SignIn, acct *account, zoneError string, canHide bool, items *itemsPart) ([]byte, error) {
 	d, err := newDashPage(v, in, s.signupsOpen)
 	if err != nil {
 		return nil, err
 	}
-	d.ZoneError = zoneError
+	d.ZoneError, d.Items = zoneError, items
 	if canHide {
 		d.HidePath = HidePath
 	}

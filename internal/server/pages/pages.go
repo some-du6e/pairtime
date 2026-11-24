@@ -218,6 +218,10 @@ type Site struct {
 	// and signupsOpen what its sample's banner says about sign-ups.
 	dash        *template.Template
 	signupsOpen bool
+	// removedFor is how long server.removed_items keeps the id of a devlog
+	// or badge taken down, such as "30 days", which the dashboard's list of
+	// them says.
+	removedFor string
 	// scripts are the install scripts /install.sh and /install.ps1 serve,
 	// by file name, as ScriptsRelease published them, and none while the
 	// pin is off (install.go).
@@ -290,6 +294,11 @@ func New(o Options) (*Site, error) {
 		return nil, fmt.Errorf("pages: %w", err)
 	}
 	s.signupsOpen = o.SignupsOpen
+	removed, ok := o.Retention.Find("server.removed_items")
+	if !ok || removed.Days == 0 {
+		return nil, errors.New("pages: the retention schedule has no server.removed_items entry with days, which the dashboard's list of devlogs and badges says")
+	}
+	s.removedFor = retention.Days(removed.Days)
 	if err := s.checkDashboard(); err != nil {
 		return nil, err
 	}

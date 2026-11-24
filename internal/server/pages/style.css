@@ -250,6 +250,17 @@ details td, details th { white-space: nowrap; }
 .zone label { font-weight: 600; }
 .zone input { font: inherit; font-size: 0.95rem; padding: 0.45rem 0.65rem; min-width: 0; width: 16rem; max-width: 100%; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
 .zone input:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
+/* The owner's devlogs and badges, each with the button that takes it
+   down behind a second click (WP-SV12 part 2). */
+section[aria-labelledby="published"] h3 { font-size: 1rem; margin: 1.1rem 0 0; }
+.items { list-style: none; padding: 0; margin: 0.5rem 0 0; }
+.items li { margin: 0; padding: 0.55rem 0; border-bottom: 1px solid var(--line); display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.3rem 0.75rem; }
+.item { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.item .meta { color: var(--muted); font-size: 0.9rem; }
+.take { margin: 0; }
+.take summary { font-size: 0.9rem; }
+.take form { margin: 0.35rem 0 0; }
+.take button { font-size: 0.85rem; font-weight: 600; padding: 0.25rem 0.6rem; border-color: var(--error); }
 /* An install command in the empty dashboard: it wraps on a phone instead
    of scrolling, and copies as one line. */
 .install { margin: 0.25rem 0 0.75rem; padding: 0.55rem 0.75rem; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; font-size: 0.85rem; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }

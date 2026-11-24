@@ -472,6 +472,19 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 				return projectnames.Hide(ctx, tx, account, project, time.Now().UnixMilli())
 			})
 		},
+		// The owner's devlogs and badges, each with the button that takes
+		// it down, so a teen who has lost the computer can still take one
+		// down (WP-SV12 part 2). The list isn't in the live part of the
+		// page, so a take-down tells no stream.
+		Published: func(ctx context.Context, account string) (pages.Published, error) {
+			return publishedOf(ctx, db.Read, account)
+		},
+		DeleteDevlog: func(ctx context.Context, account, id string) error {
+			return takeDownOp(ctx, w, devlog.DeleteHeld, account, id)
+		},
+		RemoveBadge: func(ctx context.Context, account, id string) error {
+			return takeDownOp(ctx, w, devlog.RemoveHeld, account, id)
+		},
 		SameOrigin: signIn.SameOrigin,
 		Now:        time.Now,
 		Logger:     logger,

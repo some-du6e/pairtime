@@ -369,6 +369,36 @@ func Remove(ctx context.Context, tx writer.Tx, account, id string, nowMS int64) 
 	return remove(ctx, tx, account, id, nowMS, held)
 }
 
+// DeleteHeld deletes the account's devlog id inside tx at nowMS, as Delete
+// does, but only while the account holds it, and reports whether it did.
+// The signed-in dashboard takes down only the items it lists, so it keeps
+// no removal record of an id the server doesn't hold (orchestrator,
+// 2026-11-24), while a devlog the account holds always has its record
+// kept, however many the account keeps.
+func DeleteHeld(ctx context.Context, tx writer.Tx, account, id string, nowMS int64) (bool, error) {
+	return takeHeld(ctx, tx, "devlogs", account, id, nowMS, "deleting a devlog")
+}
+
+// RemoveHeld removes the account's badge id inside tx at nowMS, as Remove
+// does, but only while the account holds it, as DeleteHeld does for a
+// devlog.
+func RemoveHeld(ctx context.Context, tx writer.Tx, account, id string, nowMS int64) (bool, error) {
+	return takeHeld(ctx, tx, "badges", account, id, nowMS, "removing a badge")
+}
+
+// takeHeld deletes the account's row id from table, keeping its removal,
+// if the account holds it, and reports whether it did.
+func takeHeld(ctx context.Context, tx writer.Tx, table, account, id string, nowMS int64, what string) (bool, error) {
+	held, err := deleteRow(ctx, tx, table, account, id)
+	if err != nil {
+		return false, fmt.Errorf("devlog: %s: %w", what, err)
+	}
+	if !held {
+		return false, nil
+	}
+	return true, remove(ctx, tx, account, id, nowMS, true)
+}
+
 // DeleteAccount deletes every devlog, badge and removal record of account,
 // inside tx: what the eraser (WP-SV13) runs when the account is deleted.
 func DeleteAccount(ctx context.Context, tx writer.Tx, account string) error {

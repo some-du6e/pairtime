@@ -181,6 +181,34 @@ zone form, whose field the owner may be typing in. */}}
 </form>
 <p class="note">Use a name like America/New_York or Europe/London. You can change it once every 30 days. A change counts from the moment you make it, and days already counted stay as they are.</p>
 </section>
+{{- with .Items}}
+
+<section aria-labelledby="published">
+<h2 id="published">Devlogs and badges</h2>
+<p class="lede">What you published from your computers. You can take any of it down here as well as on your computer, so you can do it without that computer.</p>
+<h3>Devlogs</h3>
+{{- if .Devlogs}}
+<ul class="items">
+{{- range .Devlogs}}
+<li><p class="item"><strong>{{.Title}}</strong> <span class="meta">{{.Project}}, {{.Date}}{{if .AI}}, drafted by your agent{{end}}</span></p><details class="take"><summary>Delete</summary><form method="post" action="{{$.Items.DeletePath}}"><input type="hidden" name="id" value="{{.ID}}"><button type="submit">Delete this devlog</button></form></details></li>
+{{- end}}
+</ul>
+{{- else}}
+<p class="note">You haven&#39;t published a devlog.</p>
+{{- end}}
+<h3>Badges</h3>
+{{- if .Badges}}
+<ul class="items">
+{{- range .Badges}}
+<li><p class="item"><strong>{{.Name}}</strong></p><details class="take"><summary>Remove</summary><form method="post" action="{{$.Items.RemovePath}}"><input type="hidden" name="id" value="{{.ID}}"><button type="submit">Remove this badge</button></form></details></li>
+{{- end}}
+</ul>
+{{- else}}
+<p class="note">You don&#39;t show any badges.</p>
+{{- end}}
+<p class="note">What you take down goes at once. pairtime keeps only its ID, for {{.KeptFor}}, so a computer of yours that missed the change can&#39;t publish it again.</p>
+</section>
+{{- end}}
 {{- end}}
 {{define "key"}}{{if .}}<span class="key {{.}}"></span>{{else}}<span class="key nokey"></span>{{end}}{{end}}
 {{define "cell"}}<td role="cell" data-label="{{.Label}}">{{if not .YouNone}}<strong>{{.You}}</strong> <span class="agent">{{.Agent}}</span>{{else if not .AgentNone}}<span class="agent">{{.Agent}}</span>{{else}}<span class="none">0m</span>{{end}}</td>{{end}}
