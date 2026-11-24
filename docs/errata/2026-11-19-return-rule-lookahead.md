@@ -1,6 +1,6 @@
 # Erratum: the return rule can decide a second after its minute is final
 
-Date 2026-11-19. Raised by WP-SC1. Status: the return rule decided 2026-11-20 by the orchestrator for Karim (Decision, below). SM 2.5's lookups, in [the lookup look-ahead erratum](2026-11-20-lookup-lookahead.md), are still waiting for a decision. No fixture depends on either.
+Date 2026-11-19. Raised by WP-SC1. Status: the return rule decided 2026-11-20 by the orchestrator for Karim (Decision, below). SM 2.5's lookups were decided 2026-11-23 in [the lookup look-ahead erratum](2026-11-20-lookup-lookahead.md). No fixture depends on either.
 
 ## Input
 
@@ -43,6 +43,6 @@ What it costs: a reply sent more than ten minutes after going quiet, such as eig
 
 ## Left open
 
-- SM 2.5's lookups: [the lookup look-ahead erratum](2026-11-20-lookup-lookahead.md). CC6 needs the same bound, since `REVEAL_POST_S`'s 900 s doesn't reach a long run's end bracket.
+- SM 2.5's lookups: [the lookup look-ahead erratum](2026-11-20-lookup-lookahead.md). CC6 needs the same bound, since `REVEAL_POST_S`'s 900 s doesn't reach a long run's end bracket. Decided 2026-11-23 there: a lookup counts only the acts and prompts on record `READ_HORIZON_S` after its run's start and is decided within the pending window, at most 780 s after it with today's values, so `REVEAL_POST_S`'s 900 s reaches everything it rests on.
 - SM 4.2's discounts, for WP-SC6. A turn's rewrite-loop discount rests on its own edits, which can come long after the lead it withholds. A change event's record, such as a typed command's at its end, can come after a prompt it should free from a loop. Decided 2026-11-23 in [the discount-horizon erratum](2026-11-23-discount-horizon.md).
 - Acts recorded after the fact. The bound costs a typed command its lead once it runs longer than nine minutes, its watch from ten, and everything but its trail from fifteen, because `shell.command` is written when it ends. It costs a permission answer its wait when its record, paired with the next tool event, comes more than eight minutes later. The v1.5 shell integration can record the command at its start mark (OSC 133 or 633), and the Claude Code adapters can date the answer from a record written at the answer, such as OTel's `claude_code.tool_decision` (HS 3.3).

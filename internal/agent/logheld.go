@@ -47,21 +47,23 @@ const heldLogsPrune = time.Hour
 // now, leaves it alone.
 const heldForRun = math.MaxInt64
 
-// heldLogs is the event_ids of the log records the ledger holds, from the
-// batches loadHeldLogs read and the records the adapters wrote in this run,
-// and of those the ledger dropped in this run as made in a local-only
-// stretch (D-late-local point 5). A log reader's record gets its event_id
-// from its line's file and place (adapterHost.logEventID), so a replay that
-// reads the line again makes a record of the same event_id, which the
+// heldLogs is the event_ids of the log and hook records the ledger holds,
+// from the batches loadHeldLogs read and the records the adapters wrote in
+// this run, and of those the ledger dropped in this run as made in a
+// local-only stretch (D-late-local point 5). A log reader's record gets its
+// event_id from its line's file and place (adapterHost.logEventID), and a
+// hook call's record from the call's id and its place (hookEventID), so a
+// replay that reads the line again, or parses the call again while its
+// records keep their times, makes a record of the same event_id, which the
 // adapters leave out rather than write twice. It is built from the ledger,
 // not from state.json, since a crash re-reads exactly the lines written
 // after state.json's last save. It holds every event record's id, as a log
 // reader's session.start a process tie rewrites goes to the ledger with
 // via = os (tiedStart), and the ids of other records, which are random,
-// never meet a log record's. Dropped ids stay for the run's life, as they
-// are few, but in memory only, so a re-read after a restart reaches the
-// writer, which drops the record and counts it again. It belongs to the
-// adapters' worker, which alone writes log records.
+// never meet a log or hook record's. Dropped ids stay for the run's life,
+// as they are few, but in memory only, so a re-read after a restart
+// reaches the writer, which drops the record and counts it again. It
+// belongs to the adapters' worker, which alone writes log and hook records.
 type heldLogs struct {
 	at      map[[16]byte]int64 // id → when this run wrote it, in Unix ms, or heldForRun
 	dropped map[[16]byte]struct{}
