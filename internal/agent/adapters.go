@@ -1769,12 +1769,13 @@ func (h *adapterHost) write(st *harnessStats, r adapters.Record, sent clock.Stam
 	}
 	apps := h.a.appsHost()
 	if _, ok := ev.Data.(*event.PromptSubmit); ok {
-		// apps.prompt writes the prompt once on every path, and reports
-		// whether the ledger holds it; res keeps what the ledger did.
+		// apps.prompt writes the prompt once on every path, and is told
+		// whether the ledger is done with it: it holds it, or it dropped it
+		// as made in a local-only stretch. res keeps what the ledger did.
 		res := writeRefused
 		apps.prompt(ev, r.Text, r.Late, func(ev event.Event) bool {
 			res = h.writeEvent(st, r, ev, sent)
-			return res == writeTaken
+			return res != writeRefused
 		})
 		return res
 	}

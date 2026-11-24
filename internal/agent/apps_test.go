@@ -110,7 +110,7 @@ func newAppsRig(t *testing.T) *appsRig {
 func (r *appsRig) write(t *testing.T, rec adapters.Record) {
 	t.Helper()
 	st := &harnessStats{}
-	if !r.h.write(st, rec, clock.Stamp{}) {
+	if r.h.write(st, rec, clock.Stamp{}) == writeRefused {
 		t.Fatalf("the ledger refused a %s record: %s", rec.Event.Kind(), st.LastFailure)
 	}
 }
