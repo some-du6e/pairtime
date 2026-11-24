@@ -4,6 +4,8 @@ Date 2026-11-24. Raised by the plan for WP-SB1, the submissions API. Status: dec
 
 ## Input
 
+DESIGN.md line numbers here are main's at 55152597, where this erratum was raised.
+
 - WP-SB1 (PLAN, WP-SB1's Build) stores each submission:
   - the program and the `external_id` that `POST /api/v1/submissions` is idempotent on;
   - the projects `P`, and the project keys they named at the freeze;
@@ -12,7 +14,7 @@ Date 2026-11-24. Raised by the plan for WP-SB1, the submissions API. Status: dec
   - the fresh 32-byte `r` and `SHA-256(r)`;
   - the eligibility note;
   - the state, with the time of each change, the freeze and the withdrawal included, which DESIGN 4.4 needs to open the spot-check window.
-- DESIGN 4.4's table (DESIGN.md:462-483) has no row for this record:
+- DESIGN 4.4's table (DESIGN.md:450-483) has no row for this record:
   - The evidence store's row (DESIGN.md:478) holds revealed metadata and content and the risk flags, until the spot-check window closes.
   - The decisions' row (DESIGN.md:479) holds decisions "written without personal data".
   - The minute-bucket and witness rows keep what a submission uses, as holds.
