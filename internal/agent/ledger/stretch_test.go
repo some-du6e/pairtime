@@ -1875,7 +1875,7 @@ func TestDueMarkOutlastsARestart(t *testing.T) {
 				return in
 			}, false},
 		{"and so does a git change a scan found after Open, which goes by the scan's time, whenever its commit was made",
-			false, func(r *lateRig) Input { return sampleInput(r.rng, "git.change", testT+61_000, "s_1", "p_web") }, false},
+			false, func(r *lateRig) Input { return r.gitChange(61_000) }, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1946,74 +1946,139 @@ func TestDueMarkOutlastsARestart(t *testing.T) {
 	}
 }
 
+// gitChange is a git change the startup scan found ms after the start,
+// with no monotonic reading, so only Write's scan rule (pending.scan) keeps
+// a mark Open restored off it.
+func (r *lateRig) gitChange(ms int64) Input {
+	in := sampleInput(r.rng, "git.change", testT+ms, "s_1", "p_web")
+	in.Event.Mono = 0
+	return in
+}
+
 // TestRestoredMarkEnds checks that a mark Open restored ends with the first
-// batch sealed online that it can't mark, as one holding a git change the
-// startup scan found: that batch closes the run of local-only batches with
-// itself inside, so its seal frame records no mark due, and no later seal
-// asks Waiting for the mark. A spool file that can't be read, which Waiting
-// answers yes for whatever it is asked, then can't seal a batch local-only
-// after the online ones, which would stop the batch roots.
+// batch sealed online that doesn't take it: one holding a git change the
+// startup scan found, or Open's own batch of what a kill left, whose first
+// record comes before the mark. That batch closes the run of local-only
+// batches with itself inside, so its seal frame records no mark due, and no
+// later seal asks Waiting for the mark. A spool file that can't be read,
+// which Waiting answers yes for whatever it is asked, then can't seal a
+// batch local-only after the online ones, which would stop the batch roots.
 func TestRestoredMarkEnds(t *testing.T) {
-	r := newLateRig(t)
-	// As in TestDueMarkOutlastsARestart: the install's stretch, the switch
-	// back, and the first batch after it sealed local-only for a call still
-	// on its way, which leaves the mark due in its seal frame.
-	r.note(false)
-	r.write(r.presence(1000))
-	r.take()
-	r.at(10_000)
-	r.note(true)
-	r.pause()
-	r.held.Store(true)
-	r.at(20_000)
-	r.write(r.presence(20_000))
-	first := r.seal()
-	r.held.Store(false)
-	if err := r.w.Close(); err != nil {
-		t.Fatal(err)
-	}
-	r.at(60_000)
-	r.open()
-	// Two git changes the startup scan found, each sealed at once, as the git
-	// host's sink seals them, neither of which a restored mark marks.
-	var scanned []Batch
-	for _, ms := range []int64{61_000, 62_000} {
-		r.at(ms)
-		r.write(sampleInput(r.rng, "git.change", testT+ms, "s_1", "p_web"))
-		scanned = append(scanned, r.seal())
-	}
-	// A seal while a spool file can't be read, which Waiting answers yes for.
-	r.waits.Store(true)
-	r.at(63_000)
-	r.write(r.presence(63_000))
-	b := r.seal()
-	r.waits.Store(false)
-	if err := r.w.Close(); err != nil {
-		t.Fatal(err)
-	}
-	bf, err := readBatchesFile(filepath.Join(r.dir, batchesName))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var due []uint64
-	for _, row := range bf.rows {
-		due = append(due, row.Due)
-	}
-	checks := []struct {
+	cases := []struct {
 		name string
-		ok   bool
+		// restart builds the ledger, opens the writer again with the mark due,
+		// and seals the online batches that don't take it. It returns the
+		// place in the rows of the first of them, which ends the mark.
+		restart func(t *testing.T, r *lateRig) int
 	}{
-		{"the first batch after the switch back is sealed local-only and records the mark due", !first.Online && first.Back == false && len(due) > 1 && due[1] > 0},
-		{"the startup scan's git changes are sealed online, unmarked", len(scanned) == 2 && scanned[0].Online && !scanned[0].Back && scanned[1].Online && !scanned[1].Back},
-		{"the first of them ends the mark, so its frame and those after it record none due", len(due) == 5 && due[2] == 0 && due[3] == 0 && due[4] == 0},
-		{"a seal while Waiting says yes is sealed online, as the mark that would have asked it ended", b.Online},
-		{"no batch is sealed local-only after one sealed online", !r.localAfterOnline()},
+		{"the first batch sealed online after the restart, holding a git change the startup scan found, ends the mark",
+			func(t *testing.T, r *lateRig) int {
+				// As in TestDueMarkOutlastsARestart: the install's stretch, the
+				// switch back, and the first batch after it sealed local-only for
+				// a call still on its way, which leaves the mark due.
+				r.note(false)
+				r.write(r.presence(1000))
+				r.take()
+				r.at(10_000)
+				r.note(true)
+				r.pause()
+				r.held.Store(true)
+				r.at(20_000)
+				r.write(r.presence(20_000))
+				if b := r.seal(); b.Online {
+					t.Errorf("the first batch after the switch back was sealed online, for the call on its way")
+				}
+				r.held.Store(false)
+				if err := r.w.Close(); err != nil {
+					t.Fatal(err)
+				}
+				r.at(60_000)
+				r.open()
+				// Two git changes the startup scan found, each sealed at once, as
+				// the git host's sink seals them, neither of which the mark marks.
+				for _, ms := range []int64{61_000, 62_000} {
+					r.at(ms)
+					r.write(r.gitChange(ms))
+					if b := r.seal(); !b.Online || b.Back {
+						t.Errorf("a git change's batch was sealed online %v, marked %v; want online and unmarked", b.Online, b.Back)
+					}
+				}
+				return 2
+			}},
+		{"so does the batch Open seals of what a kill left, whose first record comes before the mark",
+			func(t *testing.T, r *lateRig) int {
+				// The install's stretch, which a seal's read of config.toml online
+				// ends unnoted, a record after that read, and the watch's note
+				// after it, which arms the mark from the next record on: the
+				// note's batch holds that record, so it is sealed online, unmarked,
+				// and its frame records the mark due.
+				r.note(false)
+				r.write(r.presence(1000))
+				r.take()
+				r.at(10_000)
+				r.file.Store(true)
+				if _, ok, err := r.w.Seal(); ok || err != nil {
+					t.Fatalf("the read's seal sealed a batch %v, %v; want nothing to seal", ok, err)
+				}
+				r.at(15_000)
+				r.write(r.presence(15_000))
+				r.at(16_000)
+				r.w.NoteMode(true)
+				if b := r.take(); !b.Online || b.Back {
+					t.Errorf("the note's batch was sealed online %v, marked %v; want online and unmarked", b.Online, b.Back)
+				}
+				// A record, and a kill before the next seal.
+				r.write(r.presence(17_000))
+				abandon(r.w)
+				r.at(60_000)
+				r.open()
+				if b := r.take(); !b.Online || b.Back {
+					t.Errorf("Open's batch of what the kill left was sealed online %v, marked %v; want online and unmarked", b.Online, b.Back)
+				}
+				return 2
+			}},
 	}
-	for _, ch := range checks {
-		t.Run(ch.name, func(t *testing.T) {
-			if !ch.ok {
-				t.Errorf("no: the first batch online %v, back %v; the scanned %+v; the one after online %v; the rows' due marks %v",
-					first.Online, first.Back, scanned, b.Online, due)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := newLateRig(t)
+			ends := c.restart(t, r)
+			// A seal while a spool file can't be read, which Waiting answers
+			// yes for.
+			r.waits.Store(true)
+			r.at(70_000)
+			r.write(r.presence(70_000))
+			b := r.seal()
+			r.waits.Store(false)
+			if err := r.w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			bf, err := readBatchesFile(filepath.Join(r.dir, batchesName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var due []uint64
+			for _, row := range bf.rows {
+				due = append(due, row.Due)
+			}
+			none := len(due) > ends
+			for _, d := range due[min(ends, len(due)):] {
+				none = none && d == 0
+			}
+			checks := []struct {
+				name string
+				ok   bool
+			}{
+				{"the batch before the restart records the mark due", ends > 0 && len(due) > ends && due[ends-1] > 0},
+				{"the batch that ends the mark records none due, nor does any after it", none},
+				{"a seal while Waiting says yes is sealed online, as the mark that would have asked it ended", b.Online},
+				{"no batch is sealed local-only after one sealed online", !r.localAfterOnline()},
+			}
+			for _, ch := range checks {
+				t.Run(ch.name, func(t *testing.T) {
+					if !ch.ok {
+						t.Errorf("no: the rows' due marks %v, the last batch online %v, batches %+v", due, b.Online, r.batches)
+					}
+				})
 			}
 		})
 	}

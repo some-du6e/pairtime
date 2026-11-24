@@ -1541,15 +1541,14 @@ func (w *Writer) seal() (Batch, bool, error) {
 	takes := on && w.back > 0 && row.FirstSeq >= w.back
 	sp := sealPayload{B: row.B, FirstSeq: row.FirstSeq, N: row.N, Prev: w.head, Root: row.Root, Head: row.Head,
 		SealedAt: at.UnixMilli(), Online: &on, Back: takes && w.madeAfter(w.backFrom), LocalUntil: w.until.wall}
-	if takes && !sp.Back {
-		// A batch sealed online that a mark Open restored can't mark, as one
-		// holding a record made before Open or a git change, closes the run of
-		// local-only batches with itself inside, so the mark has nothing left
-		// to mark: it ends here, its frame records none, and no later seal
-		// asks Waiting for it.
-		w.back, w.backFrom = 0, moment{}
-	}
-	if !sp.Back {
+	// A batch sealed online that doesn't take a mark Open restored closes
+	// the run of local-only batches with itself inside, so the mark has
+	// nothing left to mark: one holding a record made before Open or a git
+	// change, and Open's own batch of what a crash left, whose first record
+	// comes before the mark. The mark ends once this frame is written, the
+	// frame records none, and no later seal asks Waiting for it.
+	ends := on && !sp.Back && w.backFrom != (moment{})
+	if !sp.Back && !ends {
 		sp.Due = w.back
 	}
 	if w.until.os > 0 {
@@ -1604,7 +1603,7 @@ func (w *Writer) seal() (Batch, bool, error) {
 	w.stretchSealed = w.stretchSealed || w.taint
 	w.taint, w.late = false, false
 	w.lastLocal = !on
-	if sp.Back {
+	if sp.Back || ends {
 		w.back, w.backFrom = 0, moment{}
 	}
 	w.b, w.head, w.snap, w.sealed = row.B, row.Head, snap, sp.SealedAt
