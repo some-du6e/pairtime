@@ -2427,9 +2427,11 @@ func dropStretches(t *testing.T, dir string, from uint64) {
 
 // TestMarkDue checks the mark Open makes due again (#359): the one the
 // newest frame that records the writer's mark recorded, the base frame's
-// while no row of a batch sealed after the sweep is kept, and for frames an
-// older version wrote, which record it only by a seal frame's Due, a row's
-// back_ended and the base frame's Back, the rule from before.
+// while no row of a batch sealed after the sweep is kept, the newest row's
+// otherwise when it records one, whichever version wrote the base frame,
+// and for frames an older version wrote, which record it only by a seal
+// frame's Due, a row's back_ended and the base frame's Back, the rule from
+// before.
 func TestMarkDue(t *testing.T) {
 	mark := func(m uint64) *uint64 { return &m }
 	// row is the row of batch b, of records first to last, as edit has it.
@@ -2475,8 +2477,10 @@ func TestMarkDue(t *testing.T) {
 			basePayload{B: 3, FirstSeq: 3, Back: 10}, []rowPayload{row(3, 3, 3, func(rp *rowPayload) { rp.BackEnded = true })}, 0},
 		{"rows an older version sealed after this version's sweep go by the older rule",
 			basePayload{B: 3, FirstSeq: 3, Back: 10, Mark: mark(10), MarkAt: 3}, []rowPayload{row(3, 3, 7, marked(0)), row(4, 8, 9, nil)}, 10},
-		{"this version's rows after an older version's sweep go by the older rule, which reads their Due",
+		{"this version's newest row after an older version's sweep goes by its own Mark",
 			basePayload{B: 3, FirstSeq: 3, Back: 10}, []rowPayload{row(3, 3, 7, nil), row(4, 8, 12, marked(0))}, 0},
+		{"a row this version sealed after an older version's sweep, which took the mark, leaves none due, though its records end below the base frame's Back",
+			basePayload{B: 3, FirstSeq: 3, Back: 10}, []rowPayload{row(3, 3, 7, nil), row(4, 8, 9, func(rp *rowPayload) { rp.Back, rp.Mark = true, mark(0) })}, 0},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

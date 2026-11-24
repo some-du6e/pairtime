@@ -1273,9 +1273,10 @@ type sealPayload struct {
 	// it sealed this one, which neither took it nor ended it (Writer.back),
 	// 0 for none, so the mark outlasts a restart: Open keeps it due from the
 	// newest row until a batch sealed online takes it or ends it
-	// (restoreStretches). Mark records the same with its 0, and Open reads
-	// Due only in a frame without Mark, as an older version wrote, which
-	// reads Due and BackEnded in its turn.
+	// (restoreStretches). Mark records the same with its 0. Open reads Due
+	// only where the newest row records no Mark, as one an older version
+	// sealed, and the base frame's Mark doesn't cover the rows (markDue); an
+	// older version's Open reads Due and BackEnded in its turn.
 	Due uint64 `json:"due,omitempty"`
 	// BackEnded says the batch was sealed online without taking a mark Open
 	// restored (Writer.backFrom), or was Open's own batch of what a crash

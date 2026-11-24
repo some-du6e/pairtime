@@ -417,24 +417,27 @@ func (w *Writer) restoreStretches(bf *batchesFile, restored []rowPayload) {
 // batch was sealed (sealPayload.Mark). So a row the sweep kept doesn't hide
 // a mark the writer armed after its seal, and a row sealed after the sweep,
 // as one that took or ended the mark, isn't passed over for the base
-// frame's mark, whatever records a power cut took.
+// frame's mark, whatever records a power cut took. A newest row of this
+// version's goes by its own Mark under a base frame without one too, as an
+// older version's sweep wrote before the upgrade: that frame is older than
+// every row this version sealed.
 //
 // Frames an older version wrote record the mark only by a seal frame's Due,
 // when its batch neither took nor ended it, a row's BackEnded and the base
-// frame's Back. Then the newest row's Due is due, or the base frame's Back
-// with no row kept, or when the newest row records none and ends before it,
-// as a row an older version sealed does, and a newest row that ended the
-// mark Open restored (BackEnded) leaves none due, though its records came
-// before the mark, as those of Open's own batch of what a crash left do.
+// frame's Back. Where the newest row records no Mark, as a row an older
+// version sealed, and the base frame's Mark doesn't cover the rows, the
+// newest row's Due is due, or the base frame's Back with no row kept, or
+// when the newest row records none and ends before it, and a newest row
+// that ended the mark Open restored (BackEnded) leaves none due, though its
+// records came before the mark, as those of Open's own batch of what a
+// crash left do.
 func markDue(bf *batchesFile, rows []rowPayload) uint64 {
 	n := len(rows)
-	if m := bf.base.Mark; m != nil {
-		switch {
-		case n == 0 || rows[n-1].B <= bf.base.MarkAt:
-			return *m
-		case rows[n-1].Mark != nil:
-			return *rows[n-1].Mark
-		}
+	switch {
+	case bf.base.Mark != nil && (n == 0 || rows[n-1].B <= bf.base.MarkAt):
+		return *bf.base.Mark
+	case n > 0 && rows[n-1].Mark != nil:
+		return *rows[n-1].Mark
 	}
 	due := bf.base.Back
 	if n > 0 && (rows[n-1].Due > 0 || rows[n-1].BackEnded || due <= rows[n-1].LastSeq) {

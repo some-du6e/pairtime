@@ -72,8 +72,10 @@ type basePayload struct {
 	// when the sweep wrote the frame (Writer.back), 0 for none, in a frame
 	// that keeps stretches, for an older version's Open, which makes it due
 	// again when no row is kept, or when the newest records none and ends
-	// before it. This version's Open reads Back only in a frame an older
-	// version wrote, which has no Mark (restoreStretches).
+	// before it. This version's Open reads Back in a frame without Mark, as
+	// an older version wrote, unless the newest row records a Mark of its
+	// own, and in one with Mark when the newest row is an older version's,
+	// sealed after MarkAt (markDue).
 	Back uint64 `json:"back,omitempty"`
 	// Mark is the writer's mark when the sweep wrote the frame
 	// (Writer.back): the first record of the batch it is due for, or 0, for
