@@ -39,6 +39,13 @@ const (
 	// RoleDesktop is an agent desktop app that hosts harness sessions
 	// (SM 3.2): entrypoint desktop.
 	RoleDesktop Role = "desktop"
+	// RoleAppServer is an agent app's own server process, which runs
+	// harness sessions for the app's clients, wherever they type: T3
+	// Code's t3 serve, and its desktop app, which runs that server as its
+	// own executable. A session it starts has parent_class agent_app
+	// (SM 1.2), so SM 2.2 rule 4 takes the session's prompts unless one
+	// of the app's messages witnesses them (rule 9).
+	RoleAppServer Role = "app_server"
 	// RoleMultiplexer is tmux, screen and the like.
 	RoleMultiplexer Role = "multiplexer"
 	// RoleRemote is a remote login server such as sshd.
@@ -56,7 +63,8 @@ const (
 
 var roles = []Role{
 	RoleNone, RoleShell, RoleWrapper, RoleTerminal, RoleIDE, RoleDesktop,
-	RoleMultiplexer, RoleRemote, RoleRuntime, RoleScheduler, RoleHarness,
+	RoleAppServer, RoleMultiplexer, RoleRemote, RoleRuntime, RoleScheduler,
+	RoleHarness,
 }
 
 // The operating systems the client ships for, as runtime.GOOS names them.
