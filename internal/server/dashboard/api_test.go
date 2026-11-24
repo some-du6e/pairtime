@@ -126,6 +126,8 @@ func TestAPIETag(t *testing.T) {
 		{name: "a view whose numbers changed gets 200 with a new ETag", v: changed, account: "u1", ifNoneMatch: []string{tag}, wantCode: 200, wantTag: ETag(changed)},
 		{name: "If-None-Match compares weakly, in a list or another header line", v: sample, account: "u1", ifNoneMatch: []string{`"other"`, `W/"x", ` + strings.TrimPrefix(tag, "W/")}, wantCode: 304, wantTag: tag},
 		{name: "If-None-Match: * matches any view", v: sample, account: "u1", ifNoneMatch: []string{"*"}, wantCode: 304, wantTag: tag},
+		{name: "a * between an entity-tag's quotes is part of that tag, so If-None-Match: \"a,*,b\" matches no view", v: sample, account: "u1", ifNoneMatch: []string{`"a,*,b"`}, wantCode: 200, wantTag: tag},
+		{name: "a * beside tags isn't the whole field value, so it matches nothing", v: sample, account: "u1", ifNoneMatch: []string{`W/"0123", *`}, wantCode: 200, wantTag: tag},
 		{name: "a tag that isn't the view's gets the view", v: sample, account: "u1", ifNoneMatch: []string{`W/"0123"`}, wantCode: 200, wantTag: tag},
 		{name: "a request that isn't signed in gets 401 whatever its If-None-Match", v: sample, ifNoneMatch: []string{"*"}, wantCode: 401},
 	}

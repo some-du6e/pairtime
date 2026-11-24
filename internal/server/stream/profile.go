@@ -152,6 +152,14 @@ func (h *Hub) daily() {
 // whether a topic has an event depends on the profile alone, never on
 // whether someone watched it yesterday. A profile that isn't public any
 // more has its streams ended and its topic dropped.
+//
+// A topic whose read failed is tried again for the same publication once
+// the others are done, Gap later and then twice as long each time, as a
+// user topic's read is (owner.go), since a page that changed at p and
+// reads the same at p+24h would otherwise never get p's event. After
+// maxReadRetries the topic is dropped and its streams end: each browser
+// reconnects with its id from before p and gets resync under the name its
+// own stream gave the profile, which one shared event couldn't say.
 func (h *Hub) profilePass(p time.Time) {
 	h.mu.Lock()
 	var due []*topic
@@ -161,44 +169,79 @@ func (h *Hub) profilePass(p time.Time) {
 		}
 	}
 	h.mu.Unlock()
-	for _, t := range due {
-		if h.ctx.Err() != nil {
-			// Close: the topics go with the hub.
-			return
-		}
-		select {
-		case h.reads <- struct{}{}:
-		case <-h.done:
-			return
-		}
-		ctx, cancel := context.WithTimeout(h.ctx, readTimeout)
-		now, public, err := h.o.Profiles.Totals(ctx, t.account, p)
-		var before ProfileTotals
-		if err == nil && public {
-			before, public, err = h.o.Profiles.Totals(ctx, t.account, p.Add(-24*time.Hour))
-		}
-		cancel()
-		<-h.reads
-		var data, was []byte
-		if err == nil && public {
-			if data, err = json.Marshal(now); err == nil {
-				was, err = json.Marshal(before)
+	wait := h.o.Gap
+	for try := 0; ; try++ {
+		var failed []*topic
+		for _, t := range due {
+			if h.ctx.Err() != nil {
+				// Close: the topics go with the hub.
+				return
+			}
+			if h.passProfile(t, p) {
+				failed = append(failed, t)
 			}
 		}
-
-		h.mu.Lock()
-		switch {
-		case h.topics[t.key] != t, h.closed:
-		case err != nil:
-			h.o.Logger.Warn("reading a profile's totals for its stream", "user", t.account, "err", err)
-		case !public:
-			h.dropLocked(t)
-		case bytes.Equal(data, was):
-		default:
-			h.publishAtLocked(t, dayNumber(p), "profile", data, p)
+		if len(failed) == 0 {
+			return
 		}
-		h.mu.Unlock()
+		if try == maxReadRetries {
+			h.mu.Lock()
+			for _, t := range failed {
+				if h.topics[t.key] == t && !h.closed {
+					h.o.Logger.Error("reading a profile's totals for its stream failed; its pages resync", "user", t.account)
+					h.dropLocked(t)
+				}
+			}
+			h.mu.Unlock()
+			return
+		}
+		if !h.sleep(wait) {
+			return
+		}
+		wait *= 2
+		due = failed
 	}
+}
+
+// passProfile publishes t's event of the publication at p when its page
+// changed since the publication before, and drops t when its profile isn't
+// public any more. It reports whether a read failed while t is still the
+// hub's topic, for profilePass to try again.
+func (h *Hub) passProfile(t *topic, p time.Time) bool {
+	select {
+	case h.reads <- struct{}{}:
+	case <-h.done:
+		return false
+	}
+	ctx, cancel := context.WithTimeout(h.ctx, readTimeout)
+	now, public, err := h.o.Profiles.Totals(ctx, t.account, p)
+	var before ProfileTotals
+	if err == nil && public {
+		before, public, err = h.o.Profiles.Totals(ctx, t.account, p.Add(-24*time.Hour))
+	}
+	cancel()
+	<-h.reads
+	var data, was []byte
+	if err == nil && public {
+		if data, err = json.Marshal(now); err == nil {
+			was, err = json.Marshal(before)
+		}
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	switch {
+	case h.topics[t.key] != t, h.closed:
+	case err != nil:
+		h.o.Logger.Warn("reading a profile's totals for its stream, will try again", "user", t.account, "err", err)
+		return true
+	case !public:
+		h.dropLocked(t)
+	case bytes.Equal(data, was):
+	default:
+		h.publishAtLocked(t, dayNumber(p), "profile", data, p)
+	}
+	return false
 }
 
 // EndProfile ends at once every stream on account's profile topic and

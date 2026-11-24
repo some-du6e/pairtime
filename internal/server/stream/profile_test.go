@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -128,6 +129,75 @@ func TestProfileTopic(t *testing.T) {
 			when, _ := watch(t, c, start, 3*day, 10*time.Minute, nil)
 			if want := []time.Duration{noon}; !reflect.DeepEqual(when, want) {
 				t.Errorf("profile events at %v, want only %v", when, want)
+			}
+		}},
+		{name: "a publication whose read failed is tried again 1 and 2 s later, and goes out at the same publication once a read works", run: func(t *testing.T, h *Hub, fp *fakeProfiles, c *client, start time.Time) {
+			// A date that ended everywhere before the bubble began: the
+			// first publication shows it.
+			fp.set("1999-12-29", 120)
+			fp.fail.Store(true)
+			time.Sleep(noon - time.Minute)
+			synctest.Wait()
+			c.read()
+			// The reads at 12:00:00 and 12:00:01 fail; the next comes at
+			// 12:00:03.
+			time.Sleep(time.Minute + 2*time.Second)
+			synctest.Wait()
+			fp.fail.Store(false)
+			time.Sleep(time.Second - time.Millisecond)
+			synctest.Wait()
+			if got := events(c.read()); len(got) != 0 {
+				t.Fatalf("events before the third try: %+v", got)
+			}
+			time.Sleep(time.Millisecond)
+			synctest.Wait()
+			got := events(c.read())
+			if len(got) != 1 || got[0].event != "profile" || !strings.HasSuffix(got[0].id, "-"+strconv.FormatUint(dayNumber(start.Add(noon)), 10)) {
+				t.Fatalf("at the third try the stream got %+v, want the profile event of the first 12:00 UTC", got)
+			}
+			if d := days(t, got[0].data); !reflect.DeepEqual(d, []string{"1999-12-29=120"}) {
+				t.Errorf("the event shows %q, want 1999-12-29's 120 s", d)
+			}
+			// Two failed reads, then the publication's and the one before.
+			if n := fp.reads.Load(); n != 4 {
+				t.Errorf("the hub read %d totals, want 4", n)
+			}
+		}},
+		{name: "a publication whose reads keep failing ends the topic's streams after maxReadRetries tries again, and each reconnect resyncs under its own name", run: func(t *testing.T, h *Hub, fp *fakeProfiles, c *client, start time.Time) {
+			fp.set("1999-12-29", 120)
+			fp.fail.Store(true)
+			// Two more viewers, by the profile's two names.
+			byName := map[string]string{}
+			for _, name := range []string{"profile:@rowan", "profile:@ro"} {
+				v := open(t, h, Path+"?topics="+name, nil)
+				byName[name] = lastID(v.read())
+				defer v.close()
+			}
+			time.Sleep(noon - time.Minute)
+			synctest.Wait()
+			c.read()
+			// Tries at 12:00:00, :01, :03, :07 and :15.
+			time.Sleep(time.Minute + 15*time.Second - time.Millisecond)
+			synctest.Wait()
+			if c.ended() || h.Streams() != 3 {
+				t.Fatalf("before the last try: the stream ended %v, %d streams open, want 3", c.ended(), h.Streams())
+			}
+			time.Sleep(time.Millisecond)
+			synctest.Wait()
+			if !c.ended() || h.Streams() != 0 {
+				t.Fatalf("after the last try: the stream ended %v, %d streams open, want none", c.ended(), h.Streams())
+			}
+			if n := fp.reads.Load(); n != maxReadRetries+1 {
+				t.Errorf("the hub read %d totals, want %d", n, maxReadRetries+1)
+			}
+			fp.fail.Store(false)
+			for name, id := range byName {
+				r := open(t, h, Path+"?topics="+name, http.Header{"Last-Event-Id": {id}})
+				got := events(r.read())
+				r.close()
+				if want := `{"topics":["` + name + `"]}`; len(got) != 1 || got[0].event != "resync" || got[0].data != want {
+					t.Errorf("%s's reconnect got %+v, want one resync of %s", name, got, want)
+				}
 			}
 		}},
 		{name: "EndProfile ends the profile's streams at once, as a removal does", run: func(t *testing.T, h *Hub, fp *fakeProfiles, c *client, start time.Time) {

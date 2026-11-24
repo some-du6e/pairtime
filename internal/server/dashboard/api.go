@@ -82,14 +82,20 @@ func ETag(v View) string {
 	return `W/"` + hex.EncodeToString(sum[:16]) + `"`
 }
 
-// noneMatch reports whether If-None-Match, as values, names tag or is *,
-// comparing tags weakly, as RFC 9110 13.1.2 asks of it.
+// noneMatch reports whether If-None-Match, as values, is * or names tag,
+// comparing tags weakly, as RFC 9110 13.1.2 asks of it. * counts only as
+// the whole field value, as the grammar has it ("*" / #entity-tag), since
+// an entity-tag may hold a comma or a * between its quotes. Splitting such
+// a tag at its commas can't make a piece that is tag, since tag is quoted
+// and an opaque-tag holds no quote.
 func noneMatch(values []string, tag string) bool {
+	if len(values) == 1 && strings.TrimSpace(values[0]) == "*" {
+		return true
+	}
 	opaque := strings.TrimPrefix(tag, "W/")
 	for _, v := range values {
 		for _, t := range strings.Split(v, ",") {
-			t = strings.TrimSpace(t)
-			if t == "*" || strings.TrimPrefix(t, "W/") == opaque {
+			if strings.TrimPrefix(strings.TrimSpace(t), "W/") == opaque {
 				return true
 			}
 		}

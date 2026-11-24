@@ -25,7 +25,9 @@
 //
 // profile:@<name> topics are anonymous. They carry only what DESIGN 8.3
 // gives the public profile: daily totals of final minutes at level A or B,
-// with no project and no time of day (PublicTotals; DESIGN 6.2 D1, D11).
+// under the day cap and never above what the owner's dashboard credits
+// (SM 5.3), with no project and no time of day (PublicTotals; DESIGN 6.2
+// D1, D11).
 // Like the public page they change once a day, at 12:00 UTC, show only
 // dates that have ended in every time zone, and take a removal at once
 // (D-public-daily, profile.go). Their ids depend on the clock alone, so a
@@ -80,7 +82,9 @@
 // read for an account with no stream open, or none in the last Window. A
 // read that fails is tried again, Gap later and then twice as long each
 // time, and after maxReadRetries the topic's streams get resync, so each
-// page refetches its numbers itself.
+// page refetches its numbers itself. A profile topic's read at 12:00 UTC is
+// tried again the same way for its publication, and after maxReadRetries
+// its streams end, so each reconnects and gets resync (profile.go).
 //
 // Publishing never blocks: an event goes to each stream's buffer without
 // waiting, and a stream whose buffer is full has fallen behind, so the hub

@@ -148,9 +148,12 @@ func (c *client) ended() bool {
 	}
 }
 
-// sse is one block of an event stream.
+// sse is one block of an event stream. hasData says it has a data field,
+// empty or not: EventSource dispatches a block that has one, and none that
+// doesn't.
 type sse struct {
 	id, event, data, retry, comment string
+	hasData                         bool
 }
 
 // parseSSE splits a stream's text into its blocks, as EventSource reads
@@ -174,7 +177,7 @@ func parseSSE(s string) []sse {
 			case "event":
 				e.event = value
 			case "data":
-				e.data = value
+				e.data, e.hasData = value, true
 			case "retry":
 				e.retry = value
 			}
@@ -184,7 +187,8 @@ func parseSSE(s string) []sse {
 	return out
 }
 
-// events returns the blocks of s that dispatch an event: those with data.
+// events returns the blocks of s that carry data: every event the hub
+// sends but the keepalive, whose data is empty.
 func events(s string) []sse {
 	var out []sse
 	for _, e := range parseSSE(s) {
@@ -249,11 +253,13 @@ func (s *viewSource) View(_ context.Context, account string, now time.Time) (das
 // and "ro". It keeps each date's credited seconds as the test sets them,
 // with when, and its Totals for a publication gives every date ended in
 // every zone by then with the seconds it had at the publication, as WP-SV9's
-// page will show them. While private is set, the profile isn't public.
+// page will show them. While private is set, the profile isn't public, and
+// while fail is set, every read of its totals fails. It counts the reads.
 type fakeProfiles struct {
 	mu      sync.Mutex
 	history map[string][]credit
 	private atomic.Bool
+	fail    atomic.Bool
 	reads   atomic.Int32
 }
 
@@ -282,6 +288,9 @@ func (f *fakeProfiles) Resolve(_ context.Context, name string) (string, bool, er
 
 func (f *fakeProfiles) Totals(_ context.Context, account string, p time.Time) (ProfileTotals, bool, error) {
 	f.reads.Add(1)
+	if f.fail.Load() {
+		return ProfileTotals{}, false, context.DeadlineExceeded
+	}
 	if account != "a1" || f.private.Load() {
 		return ProfileTotals{}, false, nil
 	}

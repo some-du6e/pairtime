@@ -5,6 +5,7 @@ package stream
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -47,7 +48,12 @@ func TestOverHTTP(t *testing.T) {
 				h.Close()
 				srv.Close()
 			})
-			req, err := http.NewRequest(http.MethodGet, srv.URL+meTopic, nil)
+			// The deadline covers the headers too, which a stream that
+			// never flushed would leave Do waiting for; readBlock's 10 s
+			// bounds each block once they're in.
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancel()
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+meTopic, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -232,7 +232,9 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request, st *stream) {
 }
 
 // first returns what a stream starts with: the reconnect delay, its place
-// as an id, resync when a topic needs it, then the gap replayed.
+// as an id, resync when a topic needs it, then the gap replayed. Once the
+// gap is in the bytes it lets the events go, so a stream left open keeps
+// none the ring has dropped since.
 func (h *Hub) first(st *stream) []byte {
 	b := append([]byte("retry: "), strconv.FormatInt(h.o.Retry.Milliseconds(), 10)...)
 	b = append(b, "\nid: "...)
@@ -248,6 +250,7 @@ func (h *Hub) first(st *stream) []byte {
 	for _, d := range st.replay {
 		b = st.appendEvent(b, d)
 	}
+	st.replay = nil
 	return b
 }
 
@@ -297,11 +300,14 @@ func (st *stream) appendEvent(b []byte, d delivery) []byte {
 
 // open checks the caps and puts a new stream on its topics, with what it
 // needs replayed or resynced when it resumes. Under the one lock, so no
-// event falls between the replay and the stream's first live one.
+// event falls between the replay and the stream's first live one. It reads
+// the clock under the lock too, so a profile stream is either on its topic
+// before a 12:00 UTC pass takes its list of topics or opens at 12:00 or
+// later and takes that publication's day as its place.
 func (h *Hub) open(wants []want, account, client string, resume map[string]position, resumed bool) (*stream, *refusal) {
-	now := time.Now()
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	now := time.Now()
 	switch {
 	case h.closed:
 		return nil, &refusal{http.StatusServiceUnavailable, CodeUnavailable}

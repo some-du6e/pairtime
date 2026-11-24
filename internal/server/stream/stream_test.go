@@ -73,10 +73,11 @@ func TestStart(t *testing.T) {
 				t.Fatalf("got %d blocks, want 1:\n%s", len(blocks), text)
 			}
 			b := blocks[0]
-			if b.retry != "5000" || b.data != "" || b.event != "" {
-				t.Errorf("first block = %+v, want retry 5000 and no event or data", b)
+			if b.retry != "5000" || b.hasData || b.event != "" {
+				t.Errorf("first block = %+v, want retry 5000 and no event or data field", b)
 			}
-			if p, ok := parseID(b.id); !ok || len(p) != 1 || p[TopicMe].seq != 0 {
+			p, ok := parseID(b.id)
+			if me, has := p[TopicMe]; !ok || len(p) != 1 || !has || me.seq != 0 {
 				t.Errorf("first block's id %q isn't user:me's place before any event", b.id)
 			}
 		}},
@@ -363,8 +364,8 @@ func TestKeepalive(t *testing.T) {
 					for _, b := range parseSSE(c.read()) {
 						if b.comment == "keepalive" {
 							at = append(at, time.Since(start))
-							if b.event != "keepalive" || b.data != "" || b.id != "" {
-								t.Errorf("a keepalive block %+v, want the comment with an event named keepalive, no data and no id", b)
+							if b.event != "keepalive" || !b.hasData || b.data != "" || b.id != "" {
+								t.Errorf("a keepalive block %+v, want the comment with an event named keepalive, an empty data field, which makes EventSource dispatch it, and no id", b)
 							}
 						}
 					}
