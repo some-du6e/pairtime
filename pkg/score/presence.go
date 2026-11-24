@@ -181,6 +181,10 @@ type presence struct {
 	// none: the sampler ran there but took no sample, so their slots are
 	// unknown, as before a machine's first sample (SM 2.1, blindAt).
 	blind []span
+	// restart is the t of the latest record of the sampler's that started
+	// the device sampling again (blind), 0 for none. No slot takes its
+	// keyboard flag from a sample before it, which the agent's carry drops.
+	restart int64
 }
 
 // reach is a record of the presence sampler's, os.presence or os.power, at
@@ -356,6 +360,7 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 					locks = append(locks, span{lockFrom, floorSlot(e.T)})
 				}
 				asleep, locked, restarting = false, false, true
+				p.restart = e.T
 				if _, ok := e.Data.(*event.OSPresence); !ok && blindFrom < 0 {
 					blindFrom = e.T
 				}
@@ -551,12 +556,17 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 		s := &p.slots[k]
 		s.Start, s.PresentUntil = a, b
 		s.Asleep, s.Locked = asleepAt[k], lockedAt[k]
+		// The keyboard flag goes by the sample that decides the slot, or
+		// after the last sample by that one, unless the sampler started
+		// again after it: the agent's carry drops a sample from before a
+		// restart, so a Step over its window has none to go by, and one
+		// Step over every record goes by none either.
 		hasKeys := false
-		switch {
+		switch last := len(p.samples) - 1; {
 		case si < len(p.samples):
 			hasKeys = p.samples[si].hasKeys
-		case len(p.samples) > 0:
-			hasKeys = p.samples[len(p.samples)-1].hasKeys
+		case last >= 0 && p.samples[last].t >= p.restart:
+			hasKeys = p.samples[last].hasKeys
 		}
 		if hasKeys && !never[k] {
 			s.InputKeys = ptr(keyAt[k])
