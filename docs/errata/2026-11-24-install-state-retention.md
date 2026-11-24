@@ -40,7 +40,7 @@ Nothing names `install/`. The privacy notices never tell the teen that pairtime 
 
 3. DESIGN 8.8's bullet names what stays:
 
-> "Delete everything" wipes the data directory and `K_dev`, but keeps pairtime's settings (`config.toml`) and install's record of what it changed (`install/`), which uninstall needs to put the teen's files back (4.4). Local-only mode keeps every coach feature and uploads nothing (4.2).
+> "Delete everything" wipes the data directory and `K_dev`, but keeps pairtime itself, its settings (`config.toml`) and install's record of what it changed (`install/`), which uninstall needs to put the teen's files back (4.4). Local-only mode keeps every coach feature and uploads nothing (4.2).
 
 4. docs/retention.json gets a `device.install` entry in the teen's words, with no days and no digit in its kept text. It says who can open the folder as `device.held_calls` says it: "in a folder other people's accounts on this computer can't open, though an administrator can".
 5. `install/` and `backups/` are 0700 and every file in them 0600, whatever the original file's mode. The manifest keeps the original's mode, which uninstall puts back.

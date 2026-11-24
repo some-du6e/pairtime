@@ -1105,7 +1105,7 @@ Redaction will sometimes fail; recall on names is the weak part of any pipeline 
 - `pairtime ledger show --day <date>` prints every recorded record in plain JSON.
 - `pairtime submit --dry-run` shows the exact reveal before anything leaves.
 - A `.pairtime-ignore` file or an exclude pattern keeps a folder out entirely; the tray has "Pause for 1 hour".
-- "Delete everything" wipes the data directory and `K_dev`, but keeps pairtime's settings (`config.toml`) and install's record of what it changed (`install/`), which uninstall needs to put the teen's files back (4.4). Local-only mode keeps every coach feature and uploads nothing (4.2).
+- "Delete everything" wipes the data directory and `K_dev`, but keeps pairtime itself, its settings (`config.toml`) and install's record of what it changed (`install/`), which uninstall needs to put the teen's files back (4.4). Local-only mode keeps every coach feature and uploads nothing (4.2).
 
 ### 8.9 Deletion and export
 
