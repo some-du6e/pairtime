@@ -12,8 +12,6 @@ sys.path.insert(0, os.path.dirname(HERE))
 
 import timeline as tl  # noqa: E402
 
-ERRATUM = "2026-11-19-sm-6.6-uncredited-codes"
-
 fx = tl.Fixture(
     "6.6",
     title="A scripted claude -p loop pretending to be a person",
@@ -199,21 +197,81 @@ def running_in(a, b):
 minutes = range(at("22:06"), END, tl.MINUTE_MS)
 bucket_minutes = sum(1 for m in minutes if running_in(m, m + tl.MINUTE_MS) > 0)
 
+
+# SM 5.2's codes, second by second. Nothing is credited and no loop or cap
+# withholds credit, and the jiggler moves in every slot, so no second is
+# X.absent. A slot's focus is the window that held focus longest in it, the
+# earliest on a tie, where os.focus records with the same app class and project
+# are one window, since app_hash stays on the device (SM 2.5). The terminal
+# holds focus all night, so a slot is the project's when it hosted a run's
+# session for most of the slot, and no project's, X.ambiguous (SM 3.2), when it
+# hosted nothing. In the project's slots a second is X.automated while a run's
+# headless turn goes and X.no_anchor otherwise.
+focus = sorted((e["t"], e["data"]) for e in events if e["kind"] == "os.focus")
+tl.check(all(d["app_class"] == "terminal" and d["app_hash"] == APP for _, d in focus),
+         "the terminal holds focus all night")
+starts = [e["data"] for e in events if e["kind"] == "session.start"]
+tl.check(len(starts) == len(turns)
+         and all(d["entrypoint"] == "sdk" and d["parent_class"] == "script_runtime" for d in starts),
+         "every session is sdk under a script, so SM 2.2 rule 4 makes each turn headless")
+
+
+def slot_project(s):
+    """The slot's focus project: the window, an app class and a project, held
+    longest, the earliest on a tie, or None for a terminal hosting nothing."""
+    edges = [(s, [d for t, d in focus if t <= s][-1])] + [(t, d) for t, d in focus if s < t < s + tl.SLOT_MS]
+    held = {}
+    for (t0, d), (t1, _) in zip(edges, edges[1:] + [(s + tl.SLOT_MS, None)]):
+        key = (d["app_class"], d.get("focus_project"))
+        held[key] = held.get(key, 0) + t1 - t0
+    best = max(held.values())
+    return next(k for k in held if held[k] == best)[1]
+
+
+def code_at(t):
+    if slot_project(t - t % tl.SLOT_MS) is None:
+        return "X.ambiguous"
+    return "X.automated" if any(r0 <= t < r1 for r0, r1 in runs) else "X.no_anchor"
+
+
+def minute_codes(m):
+    got = {}
+    for t in range(m, m + tl.MINUTE_MS, 1000):
+        got[code_at(t)] = got.get(code_at(t), 0) + 1
+    return got
+
+
+SM_SECONDS = {
+    "22:00": {"X.no_anchor": 5, "X.automated": 55},
+    "22:01": {"X.automated": 60},
+    "22:02": {"X.automated": 10, "X.no_anchor": 5, "X.ambiguous": 45},
+    "22:05": {"X.no_anchor": 2, "X.automated": 58},
+}
+for m, want in SM_SECONDS.items():
+    tl.check(minute_codes(at(m)) == want, f"{m}: SM 6.6 gives {want}, the events {minute_codes(at(m))}")
+run_codes = {}
+for m in minutes:
+    if running_in(m, m + tl.MINUTE_MS) > 0:
+        for c, n in minute_codes(m).items():
+            run_codes[c] = run_codes.get(c, 0) + n
+tl.check(run_codes == {"X.ambiguous": 2550, "X.no_anchor": 158, "X.automated": 5392}, f"22:06 to 01:59 {run_codes}")
+ambiguous_running = sum(1 for r0, r1 in runs for t in range(r0, r1, 1000) if code_at(t) == "X.ambiguous")
+tl.check(ambiguous_running == 156, f"{ambiguous_running} s of the runs fall in slots that host no harness")
+
 exp = tl.Expected(fx, sm="docs/design/struggle-metric.md 6.6", evidence="B", witness="witnessed",
                   projects={P: "Casey's project, which SM doesn't name"}, start="22:00", end="+1 02:00")
-exp.row("22:00", codes=["X.automated"], agent=running_in(at("22:00"), at("22:01")), sm="22:00", derived=["agent_running_s"],
-        erratum=ERRATUM)
-exp.row("22:01", codes=["X.agent_only"], agent=running_in(at("22:01"), at("22:02")), sm="22:01",
-        derived=["agent_running_s"], erratum=ERRATUM)
-exp.row("22:02", codes=["X.agent_only", "X.no_anchor"], agent=running_in(at("22:02"), at("22:03")), sm="22:02",
-        derived=["agent_running_s"], erratum=ERRATUM)
-exp.row("22:03", "22:05", bucket=False, codes=["X.no_anchor"], sm="22:03 to 22:04", derived=["bucket"], erratum=ERRATUM,
+exp.row("22:00", uncredited=SM_SECONDS["22:00"], agent=running_in(at("22:00"), at("22:01")), sm="22:00",
+        derived=["agent_running_s"])
+exp.row("22:01", uncredited=SM_SECONDS["22:01"], agent=running_in(at("22:01"), at("22:02")), sm="22:01",
+        derived=["agent_running_s"])
+exp.row("22:02", uncredited=SM_SECONDS["22:02"], agent=running_in(at("22:02"), at("22:03")), sm="22:02",
+        derived=["agent_running_s"])
+exp.row("22:03", "22:05", bucket=False, codes=["X.ambiguous"], sm="22:03 to 22:04", derived=["bucket"],
         note="Nothing is credited and no agent runs while the script sleeps, so these minutes have no bucket (SM 5.1).")
-exp.row("22:05", codes=["X.automated"], agent=running_in(at("22:05"), at("22:06")), sm="22:05",
-        derived=["agent_running_s"], erratum=ERRATUM)
-exp.row("22:06", "+1 02:00", codes=["X.automated", "X.agent_only", "X.no_anchor"], agent=running_in(at("22:06"), END),
-        bucket_minutes=bucket_minutes, sm="22:06 to 01:59", derived=["agent_running_s", "bucket_minutes"],
-        erratum=ERRATUM,
+exp.row("22:05", uncredited=SM_SECONDS["22:05"], agent=running_in(at("22:05"), at("22:06")), sm="22:05",
+        derived=["agent_running_s"])
+exp.row("22:06", "+1 02:00", uncredited=run_codes, agent=running_in(at("22:06"), END),
+        bucket_minutes=bucket_minutes, sm="22:06 to 01:59", derived=["agent_running_s", "bucket_minutes", "uncredited"],
         note="47 more iterations. Minutes in which the script only sleeps have no bucket.")
 tl.check(exp.rows[0]["agent_running_s"] == 55 and exp.rows[2]["agent_running_s"] == 10, "SM's first iteration")
 
@@ -227,14 +285,15 @@ expected = exp.doc(
         "prompt_spacing_sd_s": {"about": 75, "sm": "and a standard deviation near 75 s"},
         "burstiness": {"about": -0.6, "sm": "so burstiness B is about -0.6, past the -0.5 line"},
     },
-    errata=[ERRATUM],
+    errata=[],
     notes=[
-        "SM gives each minute's codes but not their seconds, and its rules don't decide the split; see the "
-        "erratum. The rows pin what SM does decide: nothing is credited, which minutes have a bucket and how "
-        "long the agent runs in each.",
+        "Each uncredited second takes SM 5.2's first code with SM 2.5's slot focus. A slot the terminal spent mostly "
+        "hosting the run's session is the project's: X.automated while claude runs, X.no_anchor before it starts or "
+        "after it exits. Every other slot hosts no harness and is X.ambiguous (SM 3.2), 156 s of the runs included.",
         "evidence is the machine's level, B: Windows without the key counter. Nothing is credited, because "
         "headless prompts never count on such a machine (SM 2.2 rule 4).",
-        f"agent_only_s is all {running} s the agent ran, since nothing is credited.",
+        f"agent_only_s is all {running} s the agent ran, whatever code its seconds carry (SM 5.3), since nothing "
+        "is credited.",
         f"This fixture's 49 prompts are spaced {mean:.1f} s apart on average with a standard deviation of "
         f"{sd:.1f} s, so B is {burst:.2f}; its agent events replay to {replay:g} s under min(gap, 120 s).",
     ],

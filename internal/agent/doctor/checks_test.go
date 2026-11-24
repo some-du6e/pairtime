@@ -226,6 +226,25 @@ func TestChecks(t *testing.T) {
 		{name: "settings that don't read warn that doctor can't tell",
 			edit:  claude(func(h *Hooks) { h.ReadError = "settings.json isn't valid JSON" }),
 			check: "hook.claude_code", want: Warn, wantHas: []string{"can't tell", "isn't valid JSON"}},
+		{name: "records of lines a replay read again, which the ledger had already, are counted, and aren't a warning",
+			edit: func(f *Facts) {
+				f.Agent.Adapters.Harnesses["claude_code"] = HarnessCounts{Calls: 5, Lines: 30, Records: 28, Repeats: 2}
+			},
+			check: "adapter.claude_code", want: OK,
+			wantHas: []string{"5 calls and 30 lines of its logs made 28 records, and left out 2 records the ledger already had, of lines it read again, with no parse failures"}},
+		{name: "records left out as repeats are counted when no call or fresh line came, as when only an idle marker's output came again",
+			edit: func(f *Facts) {
+				f.Agent.Adapters.Harnesses["claude_code"] = HarnessCounts{Repeats: 1}
+			},
+			check: "adapter.claude_code", want: OK,
+			wantHas: []string{"found; since the agent started, 0 calls made 0 records, and left out 1 record the ledger already had, of lines it read again, with no parse failures"},
+			wantNot: []string{"no hook call has come in"}},
+		{name: "records left out as repeats stay with the counts, before a parse failure and the request to report it",
+			edit: func(f *Facts) {
+				f.Agent.Adapters.Harnesses["claude_code"] = HarnessCounts{Calls: 5, Lines: 30, Records: 28, Repeats: 2, ParseFailures: 1, LastFailure: "Stop: unknown field"}
+			},
+			check: "adapter.claude_code", want: Warn,
+			wantHas: []string{"5 calls and 30 lines of its logs made 28 records, and left out 2 records the ledger already had, of lines it read again, but 1 call didn't fully parse; the last failure: Stop: unknown field. pairtime may count less of this harness until it reads them. Report this line"}},
 		{name: "an adapter's parse failures warn, with the last failure and where to report them",
 			edit: func(f *Facts) {
 				f.Agent.Adapters.Harnesses["claude_code"] = HarnessCounts{Calls: 5, ParseFailures: 2, LastFailure: "Stop: unknown field"}
@@ -249,7 +268,8 @@ func TestChecks(t *testing.T) {
 				f.Agent.Adapters.Harnesses["claude_code"] = HarnessCounts{Calls: 5, Records: 4, LateLocal: 1}
 			},
 			check: "adapter.claude_code", want: OK,
-			wantHas: []string{"1 record made while config.toml said local-only came only after pairtime had uploaded again, so the ledger dropped it,"}},
+			wantHas: []string{"1 record made while config.toml said local-only came only after pairtime had uploaded again, so the ledger dropped it,",
+				"as nothing recorded in local-only mode may upload (a log line read again after a restart counts again)"}},
 		{name: "the records the ledger dropped over the chain's life are a line of their own, which points to the adapter lines for each harness's since the start",
 			edit: func(f *Facts) {
 				f.Agent.Ledger = &Ledger{LateLocal: 12}
@@ -257,7 +277,7 @@ func TestChecks(t *testing.T) {
 			},
 			check: "ledger", want: OK,
 			wantHas: []string{"has dropped 12 records made while config.toml said local-only that came only after pairtime had uploaded again",
-				"the adapter lines count each harness's since the agent started"}},
+				"may upload (a log line read again after a restart counts again); the adapter lines count each harness's since the agent started"}},
 		{name: "drops no adapter made since the start, as presence's or the git watcher's, don't point to the adapter lines",
 			edit: func(f *Facts) { f.Agent.Ledger = &Ledger{LateLocal: 1} }, check: "ledger", want: OK,
 			wantHas: []string{"has dropped 1 record made while"}, wantNot: []string{"adapter lines"}},

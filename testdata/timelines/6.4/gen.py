@@ -279,8 +279,8 @@ exp.row("23:42", credit={P: {"SUP": 60}}, uncredited={}, agent=60, sm="23:42")
 exp.row("23:43", credit={P: {"SUP": 40}}, uncredited={"X.absent": 20}, agent=60, sm="23:43")
 exp.row("23:44", "+1 06:10", credit={}, uncredited={"X.absent": 386 * 60}, agent=386 * 60, sm="23:44 to 07:29",
         derived=["uncredited", "agent_running_s"],
-        note="The agent runs alone until 06:10:00; every second is X.absent, its turns are X.automated "
-             "and its time is agent-only.")
+        note="The agent runs alone until 06:10:00. Every second is X.absent, which comes before any turn's code (SM 5.2); "
+             "its turns are self_continue and its time is agent-only.")
 exp.row("+1 06:10", "+1 07:30", bucket=False, codes=["X.absent"], sm="23:44 to 07:29", derived=["bucket"],
         note="The agent has finished and nothing is credited, so these minutes have no bucket (SM 5.1).")
 exp.row("+1 07:30", credit={P: {"READ": 60}}, uncredited={}, sm="07:30")
