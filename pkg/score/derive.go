@@ -52,11 +52,12 @@ type deriver struct {
 // derive runs every pass over recs, which must be in record order, with now
 // as the present and reaches the sampler's records (sampledReaches) as Step
 // gives them. Besides what it derives, it returns the spans of the browser
-// and chat-app runs, and the times before which FinalBefore waits for an
-// agent app's message to pair (relayHolds).
-func derive(r rules, dev Device, recs []event.Event, now int64, reaches []reach) (Derived, []span, []int64) {
+// and chat-app runs, the times before which FinalBefore waits for an agent
+// app's message to pair (relayHolds), and the start of the first slot that
+// nothing decides yet, never for none (presence.undecided).
+func derive(r rules, dev Device, recs []event.Event, now int64, reaches []reach) (Derived, []span, []int64, int64) {
 	if len(recs) == 0 {
-		return Derived{}, nil, nil
+		return Derived{}, nil, nil, never
 	}
 	d := &deriver{r: r, dev: dev, recs: recs, now: now}
 	d.focus = buildFocus(recs)
@@ -81,7 +82,7 @@ func derive(r rules, dev Device, recs []event.Event, now int64, reaches []reach)
 	slices.SortFunc(out.Tracks, trackCmp)
 	out.Flags = d.flags
 	slices.SortFunc(out.Flags, flagCmp)
-	return out, d.lookups, d.relayHolds()
+	return out, d.lookups, d.relayHolds(), d.pres.undecided
 }
 
 // Flag is a review flag a record raised (SM 8.7, DESIGN 5.4). Flags change

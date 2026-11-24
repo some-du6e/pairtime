@@ -8,5 +8,7 @@
 // TestDesktopRehearsal in rehearsal_desktop_test.go, which needs a desktop
 // to type into, so rehearsal.yml runs it under Xvfb, against
 // navikt/mock-oauth2-server standing in for Hack Club Auth, on every PR
-// that changes what it builds or reads and on every push to main.
+// that changes what it builds or reads and on every push to main, and the
+// helpers in ports_test.go, which need none and which go test checks
+// everywhere.
 package rehearsal

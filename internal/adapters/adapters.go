@@ -87,12 +87,13 @@ type Adapter interface {
 	// time and their place counted from the end of what Parse returns (the
 	// agent's hookEventID), so a call parsed again, against later memory or
 	// without the agent's walk, gets the same ids while its records keep
-	// their times; one timed by the agent's receipt (hookpath.Times) gets new
-	// ids from the receipt of the start that parses it again. So a record
-	// that depends on the adapter's memory or the agent's walk, and that a
-	// later parse may not make, goes before the call's own records, never
-	// after them, and a later parse makes the call's own records at the same
-	// places, whatever their kinds.
+	// their times; one timed by the agent's own stamp rather than the hook's
+	// (hookpath.Times) is stamped anew by the start that parses it again
+	// (the agent's readHeld), so its records get new times and new ids. So a
+	// record that depends on the adapter's memory or the agent's walk, and
+	// that a later parse may not make, goes before the call's own records,
+	// never after them, and a later parse makes the call's own records at
+	// the same places, whatever their kinds.
 	// A raw record it can't fully read gives a *ParseError, with the
 	// records it could still make: unknown events and fields are counted
 	// as parse failures, never fatal (DESIGN 5.3). It is safe for
