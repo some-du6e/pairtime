@@ -55,8 +55,10 @@ func newWakaHome(t *testing.T, vars map[string]string) wakaHome {
 }
 
 // cfg is ~/.wakatime.cfg, and internal wakatime-internal.cfg, in h's home.
-func (h wakaHome) cfg() string      { return filepath.Join(h.env.Home, ".wakatime.cfg") }
-func (h wakaHome) internal() string { return filepath.Join(h.env.Home, ".wakatime", "wakatime-internal.cfg") }
+func (h wakaHome) cfg() string { return filepath.Join(h.env.Home, ".wakatime.cfg") }
+func (h wakaHome) internal() string {
+	return filepath.Join(h.env.Home, ".wakatime", "wakatime-internal.cfg")
+}
 
 // item returns the WakaTime item for h on port with key, "" for the one
 // install finds.
