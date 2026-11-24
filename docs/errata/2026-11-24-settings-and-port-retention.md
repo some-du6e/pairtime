@@ -67,7 +67,7 @@ The cost: labels that an older release's "delete everything" orphaned stay in co
 
 3. DESIGN 8.8's bullet will read as follows, in place of #306's:
 
-   > "Delete everything" wipes the data directory and `K_dev`, but keeps pairtime itself, its settings (`config.toml`), and install's record of what it changed (`install/`), which uninstall needs to put the teen's files back (4.4). From `config.toml` it removes the label of each project this computer tracked (its `[projects.<key>]` table) and sets `mode` back to local-only. A table for a key this computer never had, as another computer sharing the file writes, stays, and the command says how many it left. Local-only mode keeps every coach feature and uploads nothing (4.2).
+   > "Delete everything" wipes the data directory and `K_dev`, but keeps pairtime itself, its settings (`config.toml`), and install's record of what it changed (`install/`), which uninstall needs to put the teen's files back (4.4). From `config.toml` it removes the labels of the projects whose keys this computer knows when the wipe runs (each key's `[projects.<key>]` table and the entries under it) and sets `mode` back to local-only. A table for any other key stays, as another computer sharing the file writes or an older release left behind, and the command says how many it left. Local-only mode keeps every coach feature and uploads nothing (4.2).
 
 4. docs/retention.json will get two entries in the teen's words, after `device.install` and before `device.key`. Neither has `days`, and neither kept text has a digit. Both privacy notices will render them, as they render every device entry, and no golden or test pins the list.
 
