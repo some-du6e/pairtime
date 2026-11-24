@@ -138,9 +138,10 @@ func heldGap(times, stamped []int64, ttl, late, dated int64) (end, length int64)
 // the minutes wait for the next sample, or for one record the agent stamps
 // itself (a hook's, one of its own watchers', an agent app reader's; never
 // a log reader's or the bridge's) dated more than ttl, BUCKET_TTL_S, after
-// the last sample, and then any record late, PENDING_WINDOW_S -
-// READ_HORIZON_S, after that one, after which pkg/score takes them for a
-// never-sampling device's (SM 2.1). A sample that ends a gap longer than
+// the last sample, and then a record this computer's own clock dated (a
+// sample, an os.power or a record the agent stamps itself) late,
+// PENDING_WINDOW_S - READ_HORIZON_S, after that one, after which pkg/score
+// takes them for a never-sampling device's (SM 2.1). A sample that ends a gap longer than
 // ttl, as the morning's first after a night's suspend, holds the minutes
 // since the sample before it until the newest record the computer's own
 // clock dated is late past it (SM 2.1's wait for a record dated inside the
@@ -173,7 +174,7 @@ func stallNote(at, fb, pending, ttl, late int64, s sampling, focus event.AppClas
 	case s.newest == 0:
 		msg += ": presence is unknown on this computer, so the scorer has no presence sample to keep time by"
 	case at-s.newest > pending+stallMS:
-		msg += fmt.Sprintf(": no presence sample has come for %s, so they wait for the next one, or for a record the agent stamps itself (a hook's, one of its own watchers', an agent app reader's) dated more than %s after the last one, and then any record %s after that",
+		msg += fmt.Sprintf(": no presence sample has come for %s, so they wait for the next one, or for a record the agent stamps itself (a hook's, one of its own watchers', an agent app reader's) dated more than %s after the last one, and then a record this computer's own clock dated (a sample, an os.power or a record the agent stamps itself) %s after that",
 			lasting(at-s.newest), lasting(ttl), lasting(late))
 	case s.gapEnd > 0 && s.dated-s.gapEnd < late:
 		msg += fmt.Sprintf(": a presence sample came after %s without one, so the minutes since wait %s for a record dated in that gap",

@@ -181,6 +181,13 @@ func TestContent(t *testing.T) {
 			in:   track("TypeError: x is undefined"),
 			text: []byte("TypeError: x is undefined"), class: features.ErrorPaste,
 			check: tracked(false, "TypeError: x is undefined")},
+		{name: "a track label pkg/redact emptied is low_effort, since the writer tests the label it commits, even none",
+			in: func() Input {
+				in := track("")
+				in.Text = nil
+				return in
+			}(),
+			text: []byte{}, class: features.LowEffort, check: tracked(true, "")},
 		{name: "a track label with a line above its error line is an error paste, and f.es is the signature of the error line",
 			in:   track("still broken\nTypeError: x is undefined"),
 			text: []byte("still broken\nTypeError: x is undefined"), class: features.ErrorPaste,

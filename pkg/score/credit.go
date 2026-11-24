@@ -371,7 +371,7 @@ func (c *creditor) index() {
 		ids[a.ID] = i
 	}
 	for _, rt := range d.returns {
-		x := returned{Return: rt, end: rt.RunEnd, anchor: -1, sessions: d.readSessions(d.focus.at(rt.RunStart))}
+		x := returned{Return: rt, end: rt.RunEnd, anchor: -1, sessions: d.readSessions(d.focus.at(rt.RunStart), rt.ProjectKey)}
 		if i, ok := ids[rt.Anchor]; ok {
 			x.anchor = i
 		}

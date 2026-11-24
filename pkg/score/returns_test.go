@@ -3,6 +3,7 @@
 package score
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/some-du6e/pairtime/pkg/event"
@@ -100,6 +101,37 @@ func TestActsEndingASilence(t *testing.T) {
 			}
 			if s, _ := slotAt(d, at(330)); s.PresentUntil != at(335) {
 				t.Errorf("slot at 330 s is %+v; the test needs its input dated at 335 s by the focus sample", s)
+			}
+		})
+	}
+}
+
+// TestReadSessions checks whose buckets a returned run's unread prose is
+// counted in (SM 2.1, 2.5): the sessions the focused window hosts, or,
+// when it hosts none, all the sessions of the act's project, which a
+// window whose focus is unknown names no project of.
+func TestReadSessions(t *testing.T) {
+	d := &deriver{sessions: map[string]*session{
+		"s_a1": {key: "s_a1", project: "p_a"},
+		"s_b2": {key: "s_b2", project: "p_b"},
+		"s_b1": {key: "s_b1", project: "p_b"},
+	}}
+	cases := []struct {
+		name    string
+		focus   focusRec
+		project string
+		want    []string
+	}{
+		{"the sessions the focused window hosts", focusRec{project: "p_a", hosted: []string{"s_a1"}}, "p_a", []string{"s_a1"}},
+		{"with none hosted, all the sessions of the act's project, in key order", focusRec{project: "p_b"}, "p_b",
+			[]string{"s_b1", "s_b2"}},
+		{"with none hosted and a window that names no project, all the sessions of the act's project", focusRec{}, "p_b",
+			[]string{"s_b1", "s_b2"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := d.readSessions(&c.focus, c.project); !slices.Equal(got, c.want) {
+				t.Errorf("sessions %v, want %v", got, c.want)
 			}
 		})
 	}

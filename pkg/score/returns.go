@@ -148,16 +148,18 @@ func (d *deriver) breakIn(from, to int64) bool {
 }
 
 // readSessions returns the sessions whose reading buckets SM 2.1's
-// unread_prose_words counts for a run whose focus record is f: the
-// sessions the focused window hosts, or the focused project's sessions in
-// key order when it hosts none (creditor.readingPart).
-func (d *deriver) readSessions(f *focusRec) []string {
+// unread_prose_words counts for a run whose focus record is f and whose
+// returning act is of project: the sessions the focused window hosts, or
+// all the sessions of the act's project, in key order, when it hosts none
+// (creditor.readingPart; SM 2.5). The act's project is the focus project
+// wherever focus is known.
+func (d *deriver) readSessions(f *focusRec, project string) []string {
 	if len(f.hosted) > 0 {
 		return f.hosted
 	}
 	var keys []string
 	for k, s := range d.sessions {
-		if s.project == f.project {
+		if s.project == project {
 			keys = append(keys, k)
 		}
 	}

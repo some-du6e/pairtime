@@ -48,7 +48,7 @@ func TestStallNote(t *testing.T) {
 		{name: "with samples that stopped while records came, the note says how long none has come",
 			fb: at - 90*minute, sampled: at - 90*minute,
 			want: []string{"ends 1 h 30 min before", "no presence sample has come for 1 h 30 min",
-				"or for a record the agent stamps itself (a hook's, one of its own watchers', an agent app reader's) dated more than 2 h after the last one, and then any record 5 min after that"}},
+				"or for a record the agent stamps itself (a hook's, one of its own watchers', an agent app reader's) dated more than 2 h after the last one, and then a record this computer's own clock dated (a sample, an os.power or a record the agent stamps itself) 5 min after that"}},
 		{name: "with samples coming and a browser in front for two hours, a lookup's hold under SM 2.5, there is no note",
 			fb: at - 2*60*minute, sampled: at - minute, focus: event.AppBrowser},
 		{name: "with samples coming and a chat app in front, a lookup's hold under SM 2.5, there is no note",
