@@ -3,6 +3,8 @@
 package agent
 
 import (
+	"time"
+
 	"github.com/some-du6e/pairtime/internal/agent/procs"
 	"github.com/some-du6e/pairtime/internal/platform"
 )
@@ -47,6 +49,9 @@ func (a *agent) startProcs(opts Options) func() {
 func (a *agent) procsOptions(opts procs.Options) procs.Options {
 	opts.Log = a.log
 	opts.Store = a.state
+	// The lines a tailer hands over together share one read of the table
+	// for their ties (#393).
+	opts.TieReuse = time.Second
 	opts.Report = func(s procs.Session) {
 		a.log.Info("found a harness session that fires no hooks",
 			"key", s.Key, "harness", s.Harness, "parent_class", s.Event.ParentClass,

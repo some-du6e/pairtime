@@ -1447,6 +1447,57 @@ func TestTieAcrossRestarts(t *testing.T) {
 // TestTieOf checks that a tie outlives its process for EndedKeep, for the
 // session.start a short session writes after its process ended, while
 // TiedTo, which focus's sessions follow, lets it go at once.
+// TestTieReuse checks Options.TieReuse: a Tie soon after another weighs
+// that Tie's read of the table again, and ties as a new read would, while
+// one later than TieReuse, or of a session whose first line came after
+// that read began, reads the table anew.
+func TestTieReuse(t *testing.T) {
+	type try struct {
+		now, at time.Duration // after sec(0)
+		key     string
+	}
+	// first is s_one's first line, written long before and read at sec(0),
+	// whose try reads the table.
+	first := try{0, -100 * time.Second, "s_one"}
+	tests := []struct {
+		name  string
+		reuse time.Duration
+		tries []try
+		reads int
+		// pid is the process the last try tied, 0 for none.
+		pid int
+	}{
+		{"a tie within TieReuse of the last read weighs that read again, and ties the only claude as a new read would",
+			time.Second, []try{first, {500 * time.Millisecond, 200 * time.Millisecond, "s_one"}}, 1, 111},
+		{"without TieReuse every tie reads the table, and ties the same claude",
+			0, []try{first, {500 * time.Millisecond, 200 * time.Millisecond, "s_one"}}, 2, 111},
+		{"a tie later than TieReuse after the last read reads the table again",
+			time.Second, []try{first, {1500 * time.Millisecond, 200 * time.Millisecond, "s_one"}}, 2, 111},
+		{"a session whose first line came after the last read began reads the table again, and its first try ties nothing",
+			time.Second, []try{first, {500 * time.Millisecond, 300 * time.Millisecond, "s_two"}}, 2, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := &fake{procs: oneClaude()}
+			now := sec(0)
+			s := New(Options{Read: f.read, OS: platform.Linux, Self: me, Boot: boot, Now: func() time.Time { return now }, Report: func(Session) {}, TieReuse: tt.reuse})
+			var sess Session
+			var tied bool
+			for _, c := range tt.tries {
+				now = sec(0).Add(c.now)
+				sess, tied, _ = s.Tie(event.HarnessClaudeCode, c.key, sec(0).Add(c.at))
+			}
+			pid := 0
+			if tied {
+				pid = sess.PID
+			}
+			if f.reads != tt.reads || pid != tt.pid {
+				t.Errorf("the table was read %d times and the last try tied pid %d; want %d and %d", f.reads, pid, tt.reads, tt.pid)
+			}
+		})
+	}
+}
+
 func TestTieOf(t *testing.T) {
 	f := &fake{procs: oneClaude()}
 	now := sec(0)

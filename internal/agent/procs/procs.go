@@ -173,6 +173,14 @@ type Options struct {
 	// Scanned, when set, gets each scheduled or kicked scan's error, nil
 	// after a scan that worked, so the agent can tell doctor.
 	Scanned func(error)
+	// TieReuse, when above zero, lets Tie weigh again the read of the table
+	// a Tie made within the last TieReuse, instead of reading the table
+	// anew, when that read began at or after the session's first line,
+	// which is all Tie's rules ask of the read it weighs. The tailer hands a
+	// file's new lines over together, and on a busy machine many sessions
+	// write at once, each line a Tie (#393). Zero reads the table for every
+	// Tie.
+	TieReuse time.Duration
 }
 
 // Scanner finds hookless harness sessions.
@@ -182,6 +190,12 @@ type Scanner struct {
 	boot string
 
 	mu sync.Mutex
+	// lastTie is the last read of the table a Tie made, which began at
+	// began and ended at end, for the next to weigh (Options.TieReuse).
+	lastTie struct {
+		v          tableView
+		began, end time.Time
+	}
 	// claimed holds the processes hooks claimed, each with the number of
 	// table reads that had begun when its claim came. A scan forgets the
 	// claim of a process its table lacks only if the claim came before
@@ -760,18 +774,16 @@ func (s *Scanner) Tie(h event.Harness, key string, at time.Time) (sess Session, 
 	if t := s.touched[key]; t.first.IsZero() {
 		s.touchLocked(key, at, "", true)
 	}
-	read := s.touched[key].read
+	read, first := s.touched[key].read, s.touched[key].first
 	s.mu.Unlock()
 	if !read.IsZero() && !at.After(read) {
 		// A line from before the read its tie waits for: the next one.
 		return Session{}, false, false
 	}
-	began := s.opts.Now()
-	v, err := s.readTable()
+	v, began, now, err := s.tieTable(first)
 	if err != nil {
 		return Session{}, false, true
 	}
-	now := s.opts.Now()
 	s.mu.Lock()
 	sess, tied, judged, freed := s.tieLocked(v, h, key, at, read, began, now)
 	if tied || freed {
@@ -782,6 +794,32 @@ func (s *Scanner) Tie(h event.Harness, key string, at time.Time) (sess Session, 
 		s.save()
 	}
 	return sess, tied, judged
+}
+
+// tieTable returns the read of the table Tie weighs, with when it began
+// and ended: the last one a Tie made, when it ended within
+// Options.TieReuse and began at or after first, the session's first line,
+// and a new read otherwise.
+func (s *Scanner) tieTable(first time.Time) (v tableView, began, end time.Time, err error) {
+	now := s.opts.Now()
+	if s.opts.TieReuse > 0 {
+		s.mu.Lock()
+		last := s.lastTie
+		s.mu.Unlock()
+		if last.v.t != nil && now.Sub(last.end) < s.opts.TieReuse && !last.began.Before(first) {
+			return last.v, last.began, last.end, nil
+		}
+	}
+	if v, err = s.readTable(); err != nil {
+		return tableView{}, time.Time{}, time.Time{}, err
+	}
+	end = s.opts.Now()
+	if s.opts.TieReuse > 0 {
+		s.mu.Lock()
+		s.lastTie.v, s.lastTie.began, s.lastTie.end = v, now, end
+		s.mu.Unlock()
+	}
+	return v, now, end, nil
 }
 
 // tieLocked is Tie's weighing of the read v, which began at began and
