@@ -1,0 +1,282 @@
+{
+  "fixture": "focus-unknown/d-two-projects",
+  "title": "Two projects' sessions on GNOME on Wayland, whose buckets compete",
+  "sm": "docs/design/struggle-metric.md 2.5",
+  "date": "2026-11-27",
+  "timezone": "America/Sao_Paulo",
+  "utc_offset": "-03:00",
+  "os": "linux",
+  "input_keys": false,
+  "evidence": "C",
+  "witness": "witnessed",
+  "device": "d_7d45370deb20",
+  "projects": {"p_f2101ebca04b": "site", "p_fb7d677dd716": "api"},
+  "window": {"start": "2026-11-27T19:00:00Z", "end": "2026-11-27T19:15:00Z", "local": "16:00-16:15"},
+  "rows": [
+    {
+      "start": "2026-11-27T19:00:00Z",
+      "minutes": 1,
+      "local": "16:00",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_fb7d677dd716": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "3.3 rule 3, across projects where focus is unknown",
+      "note": "B1's lead from 15:58:40. A1's lead covers 16:00:20 on as well, and the lead of the next anchor at or after the second wins: B1.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-27T19:01:00Z",
+      "minutes": 1,
+      "local": "16:01",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_fb7d677dd716": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "3.3 rule 3",
+      "note": "B1 is the next anchor until 16:02:00.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-27T19:02:00Z",
+      "minutes": 1,
+      "local": "16:02",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_f2101ebca04b": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "3.3 rule 2",
+      "note": "A1's lead, which beats api's bucket, reset to 20 s when B1's turn starts at 16:02:00.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-27T19:03:00Z",
+      "minutes": 1,
+      "local": "16:03",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_f2101ebca04b": {"SUP": 50},
+        "p_fb7d677dd716": {"SUP": 10}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "2.5: buckets of different projects go to the nearest qualifying anchor",
+      "note": "A1, at 16:03:00, is nearer every second than B1 or B2, so site reads whenever its bucket has something; api reads only while site's is empty, 16:03:30 to 16:03:40. The slot from 16:03:30 credits both projects.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-24-sm-2.5-split-slots"
+    },
+    {
+      "start": "2026-11-27T19:04:00Z",
+      "minutes": 1,
+      "local": "16:04",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_f2101ebca04b": {"SUP": 40, "READ": 20}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "2.5",
+      "note": "site reads; A1 stops at 16:04:40, so SUP becomes READ.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-27T19:05:00Z",
+      "minutes": 1,
+      "local": "16:05",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_f2101ebca04b": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 30,
+      "sm": "2.5",
+      "note": "B1 stops at 16:05:30. api's bucket holds 250 s, but A1 is still the nearer anchor.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-27T19:06:00Z",
+      "minutes": 1,
+      "local": "16:06",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_f2101ebca04b": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.5",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-27T19:07:00Z",
+      "minutes": 1,
+      "local": "16:07",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_f2101ebca04b": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.5",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-27T19:08:00Z",
+      "minutes": 1,
+      "local": "16:08",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_f2101ebca04b": {"READ": 1},
+        "p_fb7d677dd716": {"READ": 59}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.5: the nearest anchor can come after the second",
+      "note": "From 16:08:01 B2, at 16:13:01, is nearer than A1, 300 s against 301, so api reads, with 9 s left in site's bucket. The slot from 16:08:00 credits both projects.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-24-sm-2.5-split-slots"
+    },
+    {
+      "start": "2026-11-27T19:09:00Z",
+      "minutes": 1,
+      "local": "16:09",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_fb7d677dd716": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.5",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-27T19:10:00Z",
+      "minutes": 1,
+      "local": "16:10",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_fb7d677dd716": {"P": 59, "READ": 1}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "3.3 rule 2",
+      "note": "api reads to 16:10:01, then B2's 180 s lead beats both buckets.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-27T19:11:00Z",
+      "minutes": 1,
+      "local": "16:11",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_fb7d677dd716": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.3",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-27T19:12:00Z",
+      "minutes": 1,
+      "local": "16:12",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_fb7d677dd716": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.3",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-27T19:13:00Z",
+      "minutes": 1,
+      "local": "16:13",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 36,
+      "credit": {
+        "p_fb7d677dd716": {"P": 1, "SUP": 35}
+      },
+      "uncredited": {"X.agent_only": 24},
+      "agent_running_s": 59,
+      "sm": "2.4 and 5.2",
+      "note": "B2 resets api's bucket at 16:13:01. site's 9 s can't be read: A1 is more than 600 s back. While B2 runs with nothing to read, X.agent_only.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-27T19:14:00Z",
+      "minutes": 1,
+      "local": "16:14",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 20,
+      "credit": {
+        "p_fb7d677dd716": {"READ": 20}
+      },
+      "uncredited": {"X.no_anchor": 9, "X.agent_only": 31},
+      "agent_running_s": 31,
+      "sm": "2.4 and 5.2",
+      "note": "B2 stops at 16:14:31; api reads its summary, then nothing is left: X.no_anchor.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    }
+  ],
+  "totals": {
+    "credited_s": 836,
+    "credited_by_project": {"p_fb7d677dd716": 485, "p_f2101ebca04b": 351},
+    "credited_by_reason": {"P": 360, "SUP": 135, "READ": 341},
+    "uncredited": {"X.no_anchor": 9, "X.agent_only": 55},
+    "agent_running_s": 300,
+    "level_a_s": 0,
+    "level_b_s": 0,
+    "level_c_s": 836,
+    "focus_unknown_s": 836,
+    "agent_only_s": 55,
+    "ai_credited_s": 836,
+    "hand_credited_s": 0,
+    "contested_buckets_s": 411,
+    "contested_leads_s": 100
+  },
+  "stated": [],
+  "approx": {},
+  "errata": ["2026-11-24-sm-2.5-split-slots"],
+  "notes": [
+    "WP-FX8's (d): two Claude Code sessions in two projects on GNOME on Wayland without pairtime's extension. Every slot's focus is unknown, so both projects' windows and buckets compete for every second (SM 2.5, 3.3 rule 1).",
+    "Leads of the two projects go by SM 3.3 rule 3, the lead of the next anchor at or after the second. Buckets of the two projects go to the project whose qualifying human anchor is nearest the second, the earlier anchor on a tie, then the lower project_key (SM 2.5). Neither tie arises: from 16:08:01 api's B2, 600 s after A1 and 1 s past the minute, is the nearer anchor, and the second's start and its middle give the same side.",
+    "contested_buckets_s counts the seconds both buckets wanted, 291 to site and 120 to api, and contested_leads_s the seconds both projects' leads wanted, all api's.",
+    "Two slots credit both projects, 16:03:30 and 16:08:00, which SM 5.1's minute bucket, one project a slot, can't record. The rows follow SM 2.5 as written, second by second. If the split-slots erratum carries D-ambiguous-anchors over to slots of unknown focus, 16:03 and 16:08 change, and site gets 360 s and api 476.",
+    "Every credited second is level C with focus_unknown."
+  ]
+}

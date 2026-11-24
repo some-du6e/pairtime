@@ -359,10 +359,12 @@ class Replay:
         for s, entries in bucket.items():
             p = self.sessions[s]["project"]
             near = [a for a in self.anchors if a.project == p and abs(a.t - tau) <= READ_HORIZON_S * SECOND]
-            # The reading horizon's own end never decides a second here: an
-            # anchor exactly 600 s away is never the only one that qualifies,
-            # so it is never the nearest either.
-            tl.check(not near or any(abs(a.t - tau) < READ_HORIZON_S * SECOND for a in near),
+            # The reading horizon's own end never decides a second here: where
+            # a bucket could take the second, an anchor exactly 600 s away is
+            # never the only one that qualifies, so it is never the nearest
+            # either. Where an anchor window holds the second, the window wins
+            # whatever the bucket's horizon (SM 3.3 rule 2).
+            tl.check(windows or not near or any(abs(a.t - tau) < READ_HORIZON_S * SECOND for a in near),
                      f"no bucket qualifies at {tau} only through an anchor exactly 600 s away")
             left = sum(v for _, v in entries)
             if left == 0:
@@ -553,7 +555,7 @@ class Case:
     def rows(self, notes):
         """Writes expected.json's rows: each bucket minute as its own row and
         each run of minutes without one as one row. notes maps a row's local
-        label to (sm, note), and note may be None."""
+        label to (sm, note) or (sm, note, erratum), and note may be None."""
         fx, exp = self.fx, self.exp
         m = self.start
         while m < self.end:
@@ -568,17 +570,17 @@ class Case:
                         credit[p][what] = credit[p].get(what, 0) + 1
                     agent += self.running(tau)
                 label = fx.hhmm(m)
-                sm, note = notes[label]
+                sm, note, erratum = (notes[label] + (None,))[:3]
                 exp.row(label, credit=credit, uncredited=unc, agent=agent, sm=sm, note=note,
-                        derived=["credited_s", "credit", "uncredited", "agent_running_s"])
+                        derived=["credited_s", "credit", "uncredited", "agent_running_s"], erratum=erratum)
                 m += tl.MINUTE_MS
                 continue
             n = m
             while n < self.end and not self.bucket_minute(n):
                 n += tl.MINUTE_MS
             label = fx.hhmm(m) if n - m == tl.MINUTE_MS else f"{fx.hhmm(m)}-{fx.hhmm(n - tl.MINUTE_MS)}"
-            sm, note = notes[label]
-            exp.row(fx.hhmm(m), fx.hhmm(n), bucket=False, sm=sm, note=note)
+            sm, note, erratum = (notes[label] + (None,))[:3]
+            exp.row(fx.hhmm(m), fx.hhmm(n), bucket=False, sm=sm, note=note, erratum=erratum)
             m = n
         unused = set(notes) - {r["local"] for r in exp.rows}
         tl.check(not unused, f"notes for rows that don't exist: {sorted(unused)}")
