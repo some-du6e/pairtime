@@ -3,6 +3,7 @@
 package submission
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/url"
@@ -107,6 +108,32 @@ func TestReads(t *testing.T) {
 				wantUser := UserJSON{PairtimeID: u1, HCASub: "sub-u1", SlackID: v.User.SlackID}
 				if v.User != wantUser || v.User.SlackID == nil || *v.User.SlackID != "U-u1" || v.ExternalID != nil || v.Totals != nil || v.ReviewURL != mine.ReviewURL {
 					t.Errorf("the program view %+v, want u1's ids, no external_id, no totals and %s", v, mine.ReviewURL)
+				}
+			},
+		},
+		{
+			name: "the totals a set Totals hook gives show in the teen view and the program view, and without a hook totals are null",
+			run: func(t *testing.T, h *harness) {
+				mine := h.create("ptd_laptop", window("hard-mode", "req-1", start, end), http.StatusCreated)
+				if mine.Totals != nil {
+					t.Errorf("totals %v without a hook, want null", mine.Totals)
+				}
+				h.svc.o.Totals = func(_ context.Context, _ Querier, sub Submission) (any, error) {
+					return map[string]any{"credited_s": 42, "of": sub.ID}, nil
+				}
+				wantTotals := map[string]any{"credited_s": float64(42), "of": mine.ID}
+				for _, as := range []string{"ptd_laptop", "prog:hard-mode"} {
+					rec := h.call(as, "GET", SubmissionsPath+"/"+mine.ID, "")
+					want(t, rec, http.StatusOK, "")
+					var got struct {
+						Totals map[string]any `json:"totals"`
+					}
+					if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+						t.Fatal(err)
+					}
+					if !reflect.DeepEqual(got.Totals, wantTotals) {
+						t.Errorf("%s's view has totals %v, want %v", as, got.Totals, wantTotals)
+					}
 				}
 			},
 		},

@@ -126,10 +126,12 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 		// runs once hca.client_id is set (newSignIn), uploads (WP-SV4) once
 		// the server key loads, and the day roots (WP-SV17) once it does
 		// and PAIRTIME_WITNESS_REPO names the witness repository.
-		// Submissions run once the submissions API is mounted below
-		// (WP-SB1), which it always is, and WP-SB4 sets EvidenceStore when
-		// it mounts the reveal upload.
-		Running: pages.Running{SignIn: cfg.HCA.ClientID != "", Uploads: keyErr == nil, Submissions: true, DayRoots: dayRoots},
+		// Submissions run once [[programs]] lists a program, since the
+		// submissions API mounted below (WP-SB1) refuses every create to a
+		// program the list doesn't hold; submissions it holds from before
+		// stay in the notice's retention table. WP-SB4 sets EvidenceStore
+		// when it mounts the reveal upload.
+		Running: pages.Running{SignIn: cfg.HCA.ClientID != "", Uploads: keyErr == nil, Submissions: len(cfg.Programs) > 0, DayRoots: dayRoots},
 	})
 	if err != nil {
 		return err

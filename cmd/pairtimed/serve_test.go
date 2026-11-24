@@ -48,6 +48,23 @@ data_dir = "data"
 	return configPath, filepath.Join(dir, "data", "pairtime.db")
 }
 
+// addPrograms lists two programs in configPath's [[programs]]: one that
+// takes hours, with takes_hours left out, and calibration's, which takes
+// none.
+func addPrograms(t *testing.T, configPath string) {
+	t.Helper()
+	f, err := os.OpenFile(configPath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("config_version = 2\n[[programs]]\nname = \"hard-mode\"\ndisplay_name = \"Hard Mode\"\n[[programs]]\nname = \"calibration\"\ndisplay_name = \"Calibration\"\ntakes_hours = false\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestStartupRefusesOldSQLite(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -145,19 +162,9 @@ func TestStartupRefusesScoringVersion(t *testing.T) {
 
 func TestServe(t *testing.T) {
 	configPath, dbPath := writeConfig(t)
-	// Two programs: one that takes hours, with takes_hours left out, and
-	// calibration's, which takes none, so the programs route lists only the
-	// first and serve wires [[programs]] into the submissions API.
-	f, err := os.OpenFile(configPath, os.O_APPEND|os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.WriteString("config_version = 2\n[[programs]]\nname = \"hard-mode\"\ndisplay_name = \"Hard Mode\"\n[[programs]]\nname = \"calibration\"\ndisplay_name = \"Calibration\"\ntakes_hours = false\n"); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatal(err)
-	}
+	// The programs route lists only the program that takes hours, and serve
+	// wires [[programs]] into the submissions API.
+	addPrograms(t, configPath)
 	e, _, stderr := testEnv()
 	type addrs struct{ public, ops string }
 	up := make(chan addrs, 1)
@@ -651,24 +658,32 @@ func TestServeHSTS(t *testing.T) {
 // waits for WP-SB4 (D-sb1-submissions, Q16).
 func TestServeRunning(t *testing.T) {
 	tests := []struct {
-		name    string
-		keys    bool
-		want    string
-		notWant string
+		name string
+		keys bool
+		// programs lists two programs in [[programs]].
+		programs bool
+		want     string
+		notWant  string
 	}{
 		{name: "without the server key ingest is off, so the notice says this server doesn't receive uploads yet",
-			want: "This server doesn&#39;t yet let anyone sign in, receive uploads from the pairtime program, keep an evidence store, or publish day roots."},
+			want: "This server doesn&#39;t yet let anyone sign in, receive uploads from the pairtime program, take hours you submit to programs, keep an evidence store, or publish day roots."},
 		{name: "with the server key ingest takes uploads, so the notice no longer lists them",
 			keys:    true,
-			want:    "This server doesn&#39;t yet let anyone sign in, keep an evidence store, or publish day roots.",
+			want:    "This server doesn&#39;t yet let anyone sign in, take hours you submit to programs, keep an evidence store, or publish day roots.",
 			notWant: "receive uploads from"},
-		{name: "the submissions API runs, so the notice never says this server doesn't take submitted hours",
-			want:    "keep an evidence store",
-			notWant: "take hours you submit to programs"},
+		{name: "with [[programs]] listing none, the submissions API refuses every create, so the notice says this server doesn't take submitted hours yet",
+			want: "take hours you submit to programs"},
+		{name: "with [[programs]] listing a program, the submissions API takes hours, so the notice no longer says it doesn't",
+			programs: true,
+			want:     "keep an evidence store",
+			notWant:  "take hours you submit to programs"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			configPath, dbPath := writeConfig(t)
+			if tt.programs {
+				addPrograms(t, configPath)
+			}
 			if tt.keys {
 				if _, err := backup.Generate(backup.KeysDir(filepath.Dir(dbPath)), rand.Reader); err != nil {
 					t.Fatal(err)

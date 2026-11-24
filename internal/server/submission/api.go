@@ -109,6 +109,11 @@ type Options struct {
 	// the move to withdrawn: WP-SB5 marks drawn, unrevealed items withheld
 	// through it.
 	OnWithdraw func(ctx context.Context, tx writer.Tx, s Submission) error
+	// Totals, when set, gives a submission's totals for the teen view and
+	// the program view, read through q, the read pool: WP-SB4 connects its
+	// re-score's totals through it in cmd/pairtimed, as it does OnFreeze.
+	// Nil, or a nil answer, shows "totals": null.
+	Totals func(ctx context.Context, q Querier, sub Submission) (any, error)
 	// Rate counts each device's requests to these routes, as ingest counts
 	// its uploads (SP 8.6), once their signature verifies, and each
 	// account's creates and withdrawals from a web session, under the
@@ -1013,7 +1018,7 @@ type TeenView struct {
 	EligibilityToConfirm bool   `json:"eligibility_to_confirm"`
 	Times
 	ReviewURL string `json:"review_url"`
-	// Totals stay null until WP-SB4's re-score fills them.
+	// Totals are Options.Totals' answer, null until WP-SB4 connects it.
 	Totals any `json:"totals"`
 }
 
@@ -1090,7 +1095,20 @@ func (s *Service) teenView(ctx context.Context, sub Submission) (TeenView, error
 	if p, ok := s.programs[sub.Program]; ok {
 		name = p.DisplayName
 	}
-	return teen(sub, r, name, s.o.BaseURL), nil
+	v := teen(sub, r, name, s.o.BaseURL)
+	if v.Totals, err = s.totalsOf(ctx, sub); err != nil {
+		return TeenView{}, err
+	}
+	return v, nil
+}
+
+// totalsOf is sub's totals for a view: Options.Totals' answer, or nil,
+// which a view shows as null, while nothing connects it.
+func (s *Service) totalsOf(ctx context.Context, sub Submission) (any, error) {
+	if s.o.Totals == nil {
+		return nil, nil
+	}
+	return s.o.Totals(ctx, s.o.Read, sub)
 }
 
 // programView is the program view of sub.
@@ -1101,9 +1119,13 @@ func (s *Service) programView(ctx context.Context, sub Submission) (ProgramView,
 		return ProgramView{}, fmt.Errorf("submission: reading %s's account: %w", sub.ID, err)
 	}
 	u.SlackID = orNull(slack.String)
+	totals, err := s.totalsOf(ctx, sub)
+	if err != nil {
+		return ProgramView{}, err
+	}
 	return ProgramView{
 		ID: sub.ID, ExternalID: orNull(sub.ExternalID), State: sub.State, User: u, Windows: windowsJSON(sub.Windows),
 		ScoringVersion: orNull(sub.ScoringVersion), Params: orNull(sub.Params), EligibilityToConfirm: sub.EligibilityToConfirm,
-		Times: timesOf(sub), ReviewURL: s.o.BaseURL + "/review/submissions/" + sub.ID,
+		Times: timesOf(sub), ReviewURL: s.o.BaseURL + "/review/submissions/" + sub.ID, Totals: totals,
 	}, nil
 }
