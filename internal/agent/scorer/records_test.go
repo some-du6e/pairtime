@@ -225,7 +225,7 @@ func TestCarry(t *testing.T) {
 			},
 		},
 		{
-			name: "of a session's outputs and stops the carry keeps the last ones and the last before each record it carries, and no others",
+			name: "of a session's outputs and stops the carry keeps the last ones and the last before the prompt it carries, and no others: no other carried record reads them",
 			fold: []event.Event{
 				ev(100, 1, "s_1", &event.SessionStart{}),
 				ev(200, 2, "s_1", &event.AgentOutput{}),
@@ -240,7 +240,7 @@ func TestCarry(t *testing.T) {
 				for _, e := range c.Sessions["s_1"].Asks {
 					seqs = append(seqs, e.Seq)
 				}
-				if want := []uint64{3, 5, 6, 7}; !slices.Equal(seqs, want) {
+				if want := []uint64{3, 6, 7}; !slices.Equal(seqs, want) {
 					t.Errorf("the carry keeps the outputs and stops numbered %v, want %v", seqs, want)
 				}
 			},

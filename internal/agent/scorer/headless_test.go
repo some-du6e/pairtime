@@ -846,6 +846,84 @@ func TestOlderPlaceNoSample(t *testing.T) {
 	}
 }
 
+// TestCarryPluginRun checks the carry's question state against a turn's run
+// (#396): only a prompt or a queued message reads the asks, so the carry
+// never brings back an earlier output of a turn whose prompt it holds. One
+// such output, dated before the turn's carried prompt, would cut the run
+// of a session no hook or log reader covers, where one Step over every
+// record runs it on to its last output.
+func TestCarryPluginRun(t *testing.T) {
+	table := testTable()
+	cases := []struct {
+		name string
+		// from is how long after the turn's prompt the window starts.
+		from int64
+	}{
+		{"a plugin-only session's turn, whose prompt and first outputs the carry holds while it runs, runs on to its last output, as one Step runs it",
+			9 * minuteMS},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var prompt event.Event
+			for _, e := range hookTurn(t, hookAt, []int64{minuteMS}) {
+				if _, ok := e.Data.(*event.PromptSubmit); ok {
+					prompt = e
+				}
+			}
+			n := 0
+			plugin := func(ts int64, d event.Payload) event.Event {
+				n++
+				e := prompt
+				e.EventID = fmt.Sprintf("01a1fb1e-5318-78a1-a7fd-%012x", n)
+				e.Mono += ts - e.T
+				e.T, e.Data, e.Source, e.Via, e.Harness, e.SessionKey = ts, d, event.SourceHook, event.ViaPlugin,
+					event.HarnessOther, "s_9"
+				return e
+			}
+			all := []event.Event{plugin(hookAt, &event.PromptSubmit{TurnKey: "t_9", LenChars: 30, TypedLenEst: 30,
+				OriginDeclared: event.DeclaredNone})}
+			// An output every 2 min, so the carry dates its prompt and its
+			// latest output at their own times, no further apart than the
+			// scorer's reach.
+			for k := int64(1); k <= 10; k++ {
+				all = append(all, plugin(hookAt+k*2*minuteMS, &event.AgentOutput{TurnKey: "t_9", Words: 30, IsFinal: k == 10}))
+			}
+			for i := range all {
+				all[i].Seq = uint64(i + 1)
+			}
+			w := &window{gaps: gapsOf(table), ttl: table.Int(params.BUCKET_TTL_S) * 1000,
+				late: (table.Int(params.PENDING_WINDOW_S) - table.Int(params.READ_HORIZON_S)) * 1000}
+			for i, e := range all {
+				w.add(e, uint64(i+1))
+			}
+			w.slide(hookAt + c.from)
+			runUntil := func(t *testing.T, recs []event.Event) int64 {
+				t.Helper()
+				_, out := score.Step(score.NewState(table, score.Device{}), recs)
+				var d score.Derived
+				d.Append(out.Final)
+				d.Append(out.Pending)
+				for _, tu := range d.Turns {
+					if tu.TurnKey == "t_9" {
+						return tu.RunUntil
+					}
+				}
+				t.Fatal("no turn for the plugin's prompt")
+				return 0
+			}
+			want := runUntil(t, all)
+			if last := all[len(all)-1].T; want != last {
+				t.Fatalf("one Step over every record runs the turn %d s past its prompt, and the case needs it to its last output, %d s",
+					(want-hookAt)/1000, (last-hookAt)/1000)
+			}
+			if got := runUntil(t, w.records()); got != want {
+				t.Errorf("a Step over the carry and the window runs the turn until %d s past its prompt, one Step over every record until %d s",
+					(got-hookAt)/1000, (want-hookAt)/1000)
+			}
+		})
+	}
+}
+
 // TestOlderPlaceQuestions checks open's rebuild of the carry's question
 // state against the window's (#380): a log reader's output that asks a
 // question folds in once the log turn's run has ended, which holds the
@@ -856,64 +934,77 @@ func TestOlderPlaceNoSample(t *testing.T) {
 // place an agent before E-prompt-class-asked saved, rebuilt from the
 // ledger, must be that carry.
 func TestOlderPlaceQuestions(t *testing.T) {
-	tmpl := hookTurn(t, hookAt, []int64{minuteMS})
-	var start, prompt event.Event
-	for _, e := range tmpl {
-		switch e.Data.(type) {
-		case *event.SessionStart:
-			start = e
-		case *event.PromptSubmit:
-			prompt = e
-		}
+	cases := []struct {
+		name string
+		// hours is how long the session runs: past the log turn's run, which
+		// holds the window's start while it runs (holdFor), so its question
+		// folds into the carry.
+		hours int64
+	}{
+		{"a place an agent before E-prompt-class-asked saved, rebuilt from the ledger, keeps the question a prompt in the window read, though a log reader's output numbered after the prompt folded in after it", 9},
 	}
-	n := 0
-	clone := func(from event.Event, ts int64, via event.Via, d event.Payload) event.Event {
-		n++
-		e := from
-		e.EventID = fmt.Sprintf("01a1fb1e-5318-78a1-a7f9-%012x", n)
-		e.Mono += ts - e.T
-		e.T, e.Via, e.Data, e.Source = ts, via, d, event.SourceHook
-		if via == event.ViaLog {
-			e.Source = event.SourceLog
-		}
-		return e
-	}
-	question := clone(prompt, hookAt+2*minuteMS, event.ViaLog, &event.AgentOutput{TurnKey: "t_0", Words: 30, IsFinal: true,
-		AsksQuestion: true})
-	asked := clone(prompt, hookAt+9*hourMS-5*minuteMS, event.ViaHook, &event.PromptSubmit{TurnKey: "t_1", LenChars: 30,
-		TypedLenEst: 30, OriginDeclared: event.DeclaredNone})
-	late := clone(prompt, hookAt+minuteMS, event.ViaLog, &event.AgentOutput{TurnKey: "t_0", Words: 30, IsFinal: true})
-	evs := []event.Event{clone(start, hookAt-minuteMS, event.ViaHook, start.Data), question, asked}
-	m := 0
-	for ts := hookAt - 55_000; ts <= hookAt+9*hourMS; ts += minuteMS {
-		m++
-		idle := float64(600 + (ts-hookAt+55_000)/1000)
-		evs = append(evs, sampleAt(tmpl, ts, fmt.Sprintf("01a1fb1e-5318-78a1-a7fb-%012x", m),
-			&event.OSPresence{IdleAnyS: idle, IdleKeysS: &idle}))
-	}
-	slices.SortStableFunc(evs, func(a, b event.Event) int { return cmp.Compare(a.T, b.T) })
-	i := slices.IndexFunc(evs, func(e event.Event) bool { return e.EventID == asked.EventID })
-	evs = slices.Insert(evs, i+1, late)
-	r := newRig(t, score.Device{})
-	// A prompt seals at once, without waiting for the seal to finish, so
-	// the rig settles after this one: the late output then comes in the
-	// next batch, which the window folds it from.
-	r.each = func(i int, l *Loop, w *ledger.Writer) {
-		if evs[i].EventID == asked.EventID {
-			r.settle(l, w)
-		}
-	}
-	r.write(evs, nil)
-	kept := r.savedCursor().Carry
-	s := kept.Sessions[prompt.SessionKey]
-	if s == nil || !slices.ContainsFunc(s.Asks, func(e *event.Event) bool { return e.EventID == question.EventID }) {
-		t.Fatalf("the window's carry doesn't keep the question for the prompt in the window, which the case needs:\n%s",
-			carryJSON(t, kept))
-	}
-	olderPlace(t, r, 2, true)
-	r.rescore()
-	if got := r.savedCursor().Carry; !reflect.DeepEqual(got, kept) {
-		t.Errorf("the rebuilt carry is\n%s\nand the window kept\n%s", carryJSON(t, got), carryJSON(t, kept))
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			tmpl := hookTurn(t, hookAt, []int64{minuteMS})
+			var start, prompt event.Event
+			for _, e := range tmpl {
+				switch e.Data.(type) {
+				case *event.SessionStart:
+					start = e
+				case *event.PromptSubmit:
+					prompt = e
+				}
+			}
+			n := 0
+			clone := func(from event.Event, ts int64, via event.Via, d event.Payload) event.Event {
+				n++
+				e := from
+				e.EventID = fmt.Sprintf("01a1fb1e-5318-78a1-a7f9-%012x", n)
+				e.Mono += ts - e.T
+				e.T, e.Via, e.Data, e.Source = ts, via, d, event.SourceHook
+				if via == event.ViaLog {
+					e.Source = event.SourceLog
+				}
+				return e
+			}
+			question := clone(prompt, hookAt+2*minuteMS, event.ViaLog, &event.AgentOutput{TurnKey: "t_0", Words: 30, IsFinal: true,
+				AsksQuestion: true})
+			asked := clone(prompt, hookAt+c.hours*hourMS-5*minuteMS, event.ViaHook, &event.PromptSubmit{TurnKey: "t_1", LenChars: 30,
+				TypedLenEst: 30, OriginDeclared: event.DeclaredNone})
+			late := clone(prompt, hookAt+minuteMS, event.ViaLog, &event.AgentOutput{TurnKey: "t_0", Words: 30, IsFinal: true})
+			evs := []event.Event{clone(start, hookAt-minuteMS, event.ViaHook, start.Data), question, asked}
+			m := 0
+			for ts := hookAt - 55_000; ts <= hookAt+c.hours*hourMS; ts += minuteMS {
+				m++
+				idle := float64(600 + (ts-hookAt+55_000)/1000)
+				evs = append(evs, sampleAt(tmpl, ts, fmt.Sprintf("01a1fb1e-5318-78a1-a7fb-%012x", m),
+					&event.OSPresence{IdleAnyS: idle, IdleKeysS: &idle}))
+			}
+			slices.SortStableFunc(evs, func(a, b event.Event) int { return cmp.Compare(a.T, b.T) })
+			i := slices.IndexFunc(evs, func(e event.Event) bool { return e.EventID == asked.EventID })
+			evs = slices.Insert(evs, i+1, late)
+			r := newRig(t, score.Device{})
+			// A prompt seals at once, without waiting for the seal to finish, so
+			// the rig settles after this one: the late output then comes in the
+			// next batch, which the window folds it from.
+			r.each = func(i int, l *Loop, w *ledger.Writer) {
+				if evs[i].EventID == asked.EventID {
+					r.settle(l, w)
+				}
+			}
+			r.write(evs, nil)
+			kept := r.savedCursor().Carry
+			s := kept.Sessions[prompt.SessionKey]
+			if s == nil || !slices.ContainsFunc(s.Asks, func(e *event.Event) bool { return e.EventID == question.EventID }) {
+				t.Fatalf("the window's carry doesn't keep the question for the prompt in the window, which the case needs:\n%s",
+					carryJSON(t, kept))
+			}
+			olderPlace(t, r, 2, true)
+			r.rescore()
+			if got := r.savedCursor().Carry; !reflect.DeepEqual(got, kept) {
+				t.Errorf("the rebuilt carry is\n%s\nand the window kept\n%s", carryJSON(t, got), carryJSON(t, kept))
+			}
+		})
 	}
 }
 
