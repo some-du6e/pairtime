@@ -303,11 +303,12 @@ func (r *rig) dirFiles(sub string) map[string][]byte {
 }
 
 // input is ev as the agent hands it to the ledger writer, with a stand-in
-// for the text its record commits. The writer derives a prompt's
-// low_effort and error_sig from its text, so the stand-in is "ok" for a
-// low-effort prompt, and otherwise prose of the prompt's length, after an
-// error line when the prompt has an error signature. Bridge and plugin
-// prompts, and a plugin's final message, come without their text.
+// for the text its record commits. The writer derives the low_effort and
+// error_sig of a prompt from its text and of a track call from its label,
+// so the stand-in is "ok" for a low-effort one, and otherwise, after an
+// error line when it has an error signature, prose of the prompt's length
+// or "a track label". Bridge and plugin prompts, and a plugin's final
+// message, come without their text.
 func input(ev event.Event) ledger.Input {
 	in := ledger.Input{Event: ev}
 	switch p := ev.Data.(type) {
@@ -321,9 +322,21 @@ func input(ev event.Event) ledger.Input {
 			in.Text = []byte(strings.Repeat("word ", max(p.Words, 1)))
 		}
 	case *event.CLITrack:
-		in.Text = []byte("a track label")
+		in.Text = []byte(trackText(p))
 	}
 	return in
+}
+
+// trackText is the stand-in label of a track call, from which the writer
+// derives the call's low_effort and error_sig again (input).
+func trackText(p *event.CLITrack) string {
+	switch {
+	case p.LowEffort:
+		return "ok"
+	case p.ErrorSig != "":
+		return "TypeError: x is undefined\na track label"
+	}
+	return "a track label"
 }
 
 func promptText(p *event.PromptSubmit) string {

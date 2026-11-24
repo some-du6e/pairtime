@@ -81,6 +81,26 @@ func TestNumbers(t *testing.T) {
 func TestContent(t *testing.T) {
 	keys := keysOf(t, testKDev)
 	long := strings.Repeat("abc€ ", 4000) // 28,000 bytes, whose 16 KiB cut falls inside a euro sign
+	// tracked checks a track call's record: the body's event carries the
+	// low_effort the writer derived from the label and no error_sig, which
+	// is local, and f.es is the keyed signature of errorLine, or none for
+	// "" (DESIGN 4.1 E-15).
+	tracked := func(lowEffort bool, errorLine string) func(*testing.T, features.F, event.Event) {
+		return func(t *testing.T, f features.F, ev event.Event) {
+			p := ev.Data.(*event.CLITrack)
+			if p.LowEffort != lowEffort || p.ErrorSig != "" {
+				t.Errorf("the stored call has low_effort %v and error_sig %q, want %v and none", p.LowEffort, p.ErrorSig,
+					lowEffort)
+			}
+			want, ok := keys.Features().ErrorSig(errorLine)
+			switch {
+			case !ok && f.ES != nil:
+				t.Errorf("f.es is %s, want none", f.ES)
+			case ok && (f.ES == nil || *f.ES != want):
+				t.Errorf("f.es is %v, want the signature of %q", f.ES, errorLine)
+			}
+		}
+	}
 	cases := []struct {
 		name   string
 		before []Input // written first, in the same session
@@ -151,9 +171,20 @@ func TestContent(t *testing.T) {
 			in: viaPlugin(harness(&event.AgentOutput{TurnKey: "t_1", Words: 9, IsFinal: true}, nil))},
 		{name: "a message that isn't the turn's final one commits nothing",
 			in: harness(&event.AgentOutput{TurnKey: "t_1", Words: 9}, nil)},
-		{name: "a track label commits like a prompt and is classed by its length",
+		{name: "a track label commits like a prompt and is classed by its words",
 			in:   track("add tests for the parser please"),
-			text: []byte("add tests for the parser please"), class: features.Substantive},
+			text: []byte("add tests for the parser please"), class: features.Substantive, check: tracked(false, "")},
+		{name: "a go-ahead padded to 30 characters is a track call's low_effort, from the text test the writer applies to the label",
+			in:   track("keep going!!!!!!!!!!!!!!!!!!!!"),
+			text: []byte("keep going!!!!!!!!!!!!!!!!!!!!"), class: features.LowEffort, check: tracked(true, "")},
+		{name: "a track label that is an error line is an error paste, and f.es is its signature",
+			in:   track("TypeError: x is undefined"),
+			text: []byte("TypeError: x is undefined"), class: features.ErrorPaste,
+			check: tracked(false, "TypeError: x is undefined")},
+		{name: "a track label with a line above its error line is an error paste, and f.es is the signature of the error line",
+			in:   track("still broken\nTypeError: x is undefined"),
+			text: []byte("still broken\nTypeError: x is undefined"), class: features.ErrorPaste,
+			check: tracked(false, "TypeError: x is undefined")},
 		{name: "an agent.tool carries its keyed hunks and command",
 			in: Input{Event: harness(&event.AgentTool{ToolClass: event.ToolEdit, LinesAdded: 5, LinesRemoved: 3,
 				TStart: testT, TEnd: testT}, nil).Event,

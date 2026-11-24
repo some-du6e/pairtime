@@ -49,6 +49,23 @@ func TestEventOf(t *testing.T) {
 		}
 		return rec
 	}
+	// track is a track call of label, recorded as the writer records it,
+	// with the error_sig it derives from the label.
+	track := func(t *testing.T, label string) pkgledger.Record {
+		t.Helper()
+		ev := fixturePrompt(t, 7)
+		ev.Source, ev.Via = event.SourceCLI, event.ViaTrack
+		p := &event.CLITrack{Label: label, TextLen: len([]rune(label)), LogMatch: event.LogNoReader}
+		if es, ok := k.Features().ErrorSig(label); ok {
+			p.ErrorSig = es.String()
+		}
+		ev.Data = p
+		rec, err := pkgledger.EventRecord(k, ev, pkgledger.Content{Text: []byte(label), Class: features.ErrorPaste})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rec
+	}
 	tests := []struct {
 		name    string
 		rec     func(t *testing.T) pkgledger.Record
@@ -73,6 +90,27 @@ func TestEventOf(t *testing.T) {
 			isEvent: true,
 			check: func(t *testing.T, ev event.Event) {
 				if got := ev.Data.(*event.PromptSubmit).ErrorSig; got != "" {
+					t.Errorf("error_sig %q, want none", got)
+				}
+			},
+		},
+		{
+			name:    "a track call's error signature comes back from the keyed value in the body's f",
+			rec:     func(t *testing.T) pkgledger.Record { return track(t, "TypeError: x is undefined") },
+			isEvent: true,
+			check: func(t *testing.T, ev event.Event) {
+				want, _ := k.Features().ErrorSig("TypeError: x is undefined")
+				if got := ev.Data.(*event.CLITrack).ErrorSig; got != want.String() {
+					t.Errorf("error_sig %q, want %q", got, want.String())
+				}
+			},
+		},
+		{
+			name:    "a track label with no error line has no error_sig",
+			rec:     func(t *testing.T) pkgledger.Record { return track(t, "add tests for the parser please") },
+			isEvent: true,
+			check: func(t *testing.T, ev event.Event) {
+				if got := ev.Data.(*event.CLITrack).ErrorSig; got != "" {
 					t.Errorf("error_sig %q, want none", got)
 				}
 			},
