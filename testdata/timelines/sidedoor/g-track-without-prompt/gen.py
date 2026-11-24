@@ -71,8 +71,10 @@ fx.emit(STOP, "agent.stop", {"turn_key": T1, "stop_reason": "end_turn", "stop_ho
 # pairtime track with no turn behind it. Its chain reaches the session's
 # claude process and it inherited CLAUDE_CODE_SESSION_ID; the transcript
 # tailer covers the session and holds no user entry for it.
+# low_effort is SM 2.2's go-ahead test on the label (DESIGN 5.4). The
+# 64-character call stands for a request, which fails it.
 fx.emit(CALL, "cli.track",
-        {"text_len": 64, "env_hints": ["CLAUDE_CODE_SESSION_ID"], "log_match": "unmatched"},
+        {"text_len": 64, "low_effort": False, "env_hints": ["CLAUDE_CODE_SESSION_ID"], "log_match": "unmatched"},
         source="cli", via="track", sample=True, **CC)
 
 events = fx.build()

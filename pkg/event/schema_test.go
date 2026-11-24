@@ -554,6 +554,8 @@ func TestSchemaBounds(t *testing.T) {
 		{"a MinHash sketch has at least MinHashSize values", []string{"$defs", "prompt.submit", "properties", "minhash"}, "minItems", float64(MinHashSize)},
 		{"a MinHash sketch has at most MinHashSize values", []string{"$defs", "prompt.submit", "properties", "minhash"}, "maxItems", float64(MinHashSize)},
 		{"a track label holds at most MaxLabelLen characters", []string{"$defs", "cli.track", "properties", "label"}, "maxLength", float64(MaxLabelLen)},
+		{"a track label's pattern refuses every control character but LF", []string{"$defs", "cli.track", "properties", "label"}, "pattern",
+			`^[^\u0000-\u0009\u000b-\u001f\u007f-\u009f]*$`},
 		{"key lists hold at most maxList keys", []string{"$defs", "key_list"}, "maxItems", float64(maxList)},
 		{"env hints hold at most maxList names", []string{"$defs", "cli.track", "properties", "env_hints"}, "maxItems", float64(maxList)},
 		{"parents hold at most maxList ids", []string{"$defs", "git.change", "properties", "parents"}, "maxItems", float64(maxList)},

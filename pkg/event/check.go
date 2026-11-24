@@ -333,6 +333,21 @@ func (c *checker) text(field, v string, maxRunes int) {
 	}
 }
 
+// lines checks multi-line free text: valid UTF-8, at most maxRunes
+// characters, and no control character but LF.
+func (c *checker) lines(field, v string, maxRunes int) {
+	if !utf8.ValidString(v) {
+		c.addf(field, "must be valid UTF-8")
+		return
+	}
+	if n := utf8.RuneCountInString(v); n > maxRunes {
+		c.addf(field, "has %d characters, more than %d", n, maxRunes)
+	}
+	if strings.IndexFunc(v, func(r rune) bool { return r != '\n' && unicode.IsControl(r) }) >= 0 {
+		c.addf(field, "must not contain control characters other than line feeds")
+	}
+}
+
 func (c *checker) unixMS(field string, v int64) {
 	if v < minUnixMS || v >= maxUnixMS {
 		c.addf(field, "must be Unix milliseconds between 2020 and 2100, got %d", v)
